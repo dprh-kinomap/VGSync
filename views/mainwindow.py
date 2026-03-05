@@ -590,6 +590,12 @@ class MainWindow(QMainWindow):
         load_track_action.triggered.connect(self.load_track_file)
         file_menu.addAction(load_track_action)
 
+        # ---------- new: import propositions JSON ----------
+        import_prop_action = QAction("Import Proposals (JSON)", self)
+        import_prop_action.setStatusTip("Import JSON containing location proposals for video times")
+        import_prop_action.triggered.connect(self.import_proposals_json)
+        file_menu.addAction(import_prop_action)
+
         load_mp4_action = QAction("Import Video", self)
         load_mp4_action.setStatusTip("Load one or more Videos.")
         load_mp4_action.triggered.connect(self.load_mp4_files)
@@ -6714,7 +6720,7 @@ class MainWindow(QMainWindow):
         else:
             mode = "new"
 
-        # Kombiniertes Dateiauswahlfenster für beide Formate
+        # Kombiniertes Dateiauswahlfenster für beide Formate (restored from earlier)
         file_path, selected_filter = QFileDialog.getOpenFileName(
             self,
             "Select Track File (GPX or FIT)",
@@ -6750,6 +6756,161 @@ class MainWindow(QMainWindow):
                 "Error Loading File", 
                 f"Failed to load track file:\n{str(e)}"
             )
+
+    # ---------------------------------------------------------------------
+    # JSON import of coordinate proposals
+    # ---------------------------------------------------------------------
+    def import_proposals_json(self):
+        """Opens file dialog, loads the JSON array produced by the proposal tool,
+        converts each entry into a GPX point and appends them to the current
+        track (or starts a new track if none exist)."""
+        from PySide6.QtWidgets import QFileDialog
+
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select proposals JSON file",
+            "",
+            "JSON files (*.json);;All Files (*.*)"
+        )
+        if not file_path:
+            return
+
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Could not load JSON: {e}")
+            return
+
+        if not isinstance(data, list):
+            QMessageBox.warning(self, "Import Proposals", "JSON does not contain an array.")
+            return
+
+        import datetime as _dt
+        # group by time to apply confidence threshold
+        times_map: dict[float, list] = {}
+        for item in data:
+            try:
+                t = float(item.get("time", 0.0))
+            except Exception:
+                continue
+            times_map.setdefault(t, []).append(item)
+
+        pts = []
+        for t, items in times_map.items():
+            # find best confidence entry
+            best = max(items, key=lambda it: float(it.get("confidence", 0.0)))
+            # if the best candidate is reasonably confident, drop the rest
+            # threshold can be adjusted later (0.5 seems appropriate)
+            if float(best.get("confidence", 0.0)) > 0.5 and len(items) > 1:
+                # good‑confidence winner – import only the best
+                try:
+                    lat = float(best.get("lat", 0.0))
+                    lon = float(best.get("lon", 0.0))
+                except Exception:
+                    continue
+                dt_obj = _dt.datetime.fromtimestamp(t, _dt.timezone.utc)
+                pts.append({
+                    "lat": lat,
+                    "lon": lon,
+                    "ele": 0.0,
+                    "time": dt_obj,
+                    "confidence": float(best.get("confidence", 0.0))
+                })
+            else:
+                # either not confident or single candidate – keep all
+                for it in items:
+                    try:
+                        lat = float(it.get("lat", 0.0))
+                        lon = float(it.get("lon", 0.0))
+                    except Exception:
+                        continue
+                    dt_obj = _dt.datetime.fromtimestamp(t, _dt.timezone.utc)
+                    pts.append({
+                        "lat": lat,
+                        "lon": lon,
+                        "ele": 0.0,
+                        "time": dt_obj,
+                        "confidence": float(it.get("confidence", 0.0))
+                    })
+
+        if not pts:
+            QMessageBox.information(self, "Import Proposals", "No valid points found in JSON.")
+            return
+
+        # sort by time
+        pts.sort(key=lambda p: p["time"])
+
+        # second pass: refine groups with >1 candidate by neighbour distance
+        if len(pts) >= 2:
+            refined = []
+            i = 0
+            n = len(pts)
+            while i < n:
+                tval = pts[i]["time"]
+                # collect group with same time
+                j = i
+                group = []
+                while j < n and pts[j]["time"] == tval:
+                    group.append(pts[j])
+                    j += 1
+                if len(group) <= 1:
+                    refined.append(group[0])
+                else:
+                    prev_pt = refined[-1] if refined else None
+                    next_pt = pts[j] if j < n else None
+                    if prev_pt is None or next_pt is None:
+                        # no neighbours on one side -> fall back to confidence
+                        best = max(group, key=lambda p: p.get("confidence", 0))
+                        refined.append(best)
+                    else:
+                        best_score = -1.0
+                        best_pt = None
+                        for pt in group:
+                            dprev = self._haversine_m(prev_pt["lat"], prev_pt["lon"], pt["lat"], pt["lon"])
+                            dnext = self._haversine_m(pt["lat"], pt["lon"], next_pt["lat"], next_pt["lon"])
+                            score = (1.0 / (dprev + dnext + 1e-6)) * pt.get("confidence", 0)
+                            if score > best_score:
+                                best_score = score
+                                best_pt = pt
+                        refined.append(best_pt)
+                i = j
+            pts = refined
+
+        # outlier removal: replace outliers with midpoint if direct distance (prev, next) < distance (prev, curr)
+        if len(pts) >= 3:
+            for i in range(1, len(pts) - 1):
+                prev_pt = pts[i - 1]
+                curr_pt = pts[i]
+                next_pt = pts[i + 1]
+                dist_prev_curr = self._haversine_m(prev_pt["lat"], prev_pt["lon"], curr_pt["lat"], curr_pt["lon"])
+                dist_prev_next = self._haversine_m(prev_pt["lat"], prev_pt["lon"], next_pt["lat"], next_pt["lon"])
+                if dist_prev_next < dist_prev_curr:
+                    # outlier detected: replace with midpoint
+                    pts[i]["lat"] = (prev_pt["lat"] + next_pt["lat"]) / 2
+                    pts[i]["lon"] = (prev_pt["lon"] + next_pt["lon"]) / 2
+
+        if getattr(self, "_gpx_data", None):
+            # append
+            self._gpx_data.extend(pts)
+        else:
+            self._gpx_data = pts
+
+        # keep the track sorted by time
+        self._gpx_data.sort(key=lambda p: p.get("time", _dt.datetime.min))
+
+        # strip our temporary confidence field (not needed downstream)
+        for p in self._gpx_data:
+            if "confidence" in p:
+                p.pop("confidence")
+
+        # recalc metrics and refresh UI
+        from core.gpx_parser import recalc_gpx_data
+        recalc_gpx_data(self._gpx_data)
+        self._set_gpx_data(self._gpx_data)
+
+        QMessageBox.information(self, "Import Proposals", f"Imported {len(pts)} points.")
+        return
     
 
     
