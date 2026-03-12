@@ -6787,9 +6787,53 @@ class MainWindow(QMainWindow):
             return
 
         import datetime as _dt
+        
+        # Detect format: check if first item has "frame" (new format with topk) or "time" (old format)
+        is_topk_format = False
+        if data and isinstance(data[0], dict) and "topk" in data[0]:
+            is_topk_format = True
+        
+        items_list = []
+        
+        if is_topk_format:
+            # New format: {frame: "HH:MM:SS.SS_anchor.jpg", topk: [{rank, score, lat, lon, ...}, ...]}
+            for frame_entry in data:
+                try:
+                    frame_str = frame_entry.get("frame", "")
+                    # Extract time from frame name (e.g., "0000020.00_anchor.jpg" -> 20.0 seconds)
+                    time_str = frame_str.split("_")[0]
+                    t = float(time_str)
+                except Exception:
+                    continue
+                
+                topk = frame_entry.get("topk", [])
+                for candidate in topk:
+                    try:
+                        lat = float(candidate.get("lat", 0.0))
+                        lon = float(candidate.get("lon", 0.0))
+                        confidence = float(candidate.get("score", 0.0))
+                        rank = int(candidate.get("rank", 999))
+                    except Exception:
+                        continue
+                    items_list.append({
+                        "time": t,
+                        "lat": lat,
+                        "lon": lon,
+                        "confidence": confidence,
+                        "rank": rank
+                    })
+        else:
+            # Old format: [{time, lat, lon, confidence, rank}, ...]
+            for item in data:
+                try:
+                    t = float(item.get("time", 0.0))
+                except Exception:
+                    continue
+                items_list.append(item)
+        
         # group by time to apply confidence threshold
         times_map: dict[float, list] = {}
-        for item in data:
+        for item in items_list:
             try:
                 t = float(item.get("time", 0.0))
             except Exception:
@@ -6800,9 +6844,16 @@ class MainWindow(QMainWindow):
         for t, items in times_map.items():
             # find best confidence entry
             best = max(items, key=lambda it: float(it.get("confidence", 0.0)))
+            best_conf = float(best.get("confidence", 0.0))
+            
+            # DEBUG: log details for point around 1:09 (69 seconds) and nearby
+            print(f"\n>>> Time {t}s: {len(items)} candidates, best score: {best_conf:.6f}")
+            for idx, it in enumerate(items):
+                print(f"    [{idx}] Score: {float(it.get('confidence', 0.0)):.6f}, Lat: {it.get('lat'):.8f}, Lon: {it.get('lon'):.8f}, Rank: {it.get('rank', '?')}")
+        
             # if the best candidate is reasonably confident, drop the rest
             # threshold can be adjusted later (0.5 seems appropriate)
-            if float(best.get("confidence", 0.0)) > 0.5 and len(items) > 1:
+            if best_conf > 0.5 and len(items) > 1:
                 # good‑confidence winner – import only the best
                 try:
                     lat = float(best.get("lat", 0.0))
@@ -6810,15 +6861,17 @@ class MainWindow(QMainWindow):
                 except Exception:
                     continue
                 dt_obj = _dt.datetime.fromtimestamp(t, _dt.timezone.utc)
+                print(f"    → SELECTED (high conf): Lat {lat:.8f}, Lon {lon:.8f}")
                 pts.append({
                     "lat": lat,
                     "lon": lon,
                     "ele": 0.0,
                     "time": dt_obj,
-                    "confidence": float(best.get("confidence", 0.0))
+                    "confidence": best_conf
                 })
             else:
                 # either not confident or single candidate – keep all
+                print(f"    → KEEPING ALL ({len(items)} points)")
                 for it in items:
                     try:
                         lat = float(it.get("lat", 0.0))
@@ -6826,6 +6879,7 @@ class MainWindow(QMainWindow):
                     except Exception:
                         continue
                     dt_obj = _dt.datetime.fromtimestamp(t, _dt.timezone.utc)
+                    print(f"       Added: Lat {lat:.8f}, Lon {lon:.8f}")
                     pts.append({
                         "lat": lat,
                         "lon": lon,
@@ -6879,16 +6933,21 @@ class MainWindow(QMainWindow):
 
         # outlier removal: replace outliers with midpoint if direct distance (prev, next) < distance (prev, curr)
         if len(pts) >= 3:
+            print(f"\nOutlier removal: checking {len(pts)} points")
             for i in range(1, len(pts) - 1):
                 prev_pt = pts[i - 1]
                 curr_pt = pts[i]
                 next_pt = pts[i + 1]
                 dist_prev_curr = self._haversine_m(prev_pt["lat"], prev_pt["lon"], curr_pt["lat"], curr_pt["lon"])
                 dist_prev_next = self._haversine_m(prev_pt["lat"], prev_pt["lon"], next_pt["lat"], next_pt["lon"])
+                print(f"Point {i} (t={curr_pt['time'].timestamp():.1f}): dist_prev-curr={dist_prev_curr:.1f}m, dist_prev-next={dist_prev_next:.1f}m", end="")
                 if dist_prev_next < dist_prev_curr:
                     # outlier detected: replace with midpoint
+                    print(f" → OUTLIER, replacing with midpoint")
                     pts[i]["lat"] = (prev_pt["lat"] + next_pt["lat"]) / 2
                     pts[i]["lon"] = (prev_pt["lon"] + next_pt["lon"]) / 2
+                else:
+                    print()
 
         if getattr(self, "_gpx_data", None):
             # append
