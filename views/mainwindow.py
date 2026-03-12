@@ -6806,6 +6806,9 @@ class MainWindow(QMainWindow):
                 except Exception:
                     continue
                 
+                # Optional context on frame level (e.g. "anchor", "jump_before", "jump_after")
+                frame_context = frame_entry.get("context", "anchor")
+                
                 topk = frame_entry.get("topk", [])
                 for candidate in topk:
                     try:
@@ -6820,7 +6823,8 @@ class MainWindow(QMainWindow):
                         "lat": lat,
                         "lon": lon,
                         "confidence": confidence,
-                        "rank": rank
+                        "rank": rank,
+                        "context": frame_context
                     })
         else:
             # Old format: [{time, lat, lon, confidence, rank}, ...]
@@ -6867,7 +6871,9 @@ class MainWindow(QMainWindow):
                     "lon": lon,
                     "ele": 0.0,
                     "time": dt_obj,
-                    "confidence": best_conf
+                    "confidence": best_conf,
+                    # carry proposal context if available (default: "anchor")
+                    "context": best.get("context", "anchor")
                 })
             else:
                 # either not confident or single candidate – keep all
@@ -6885,7 +6891,9 @@ class MainWindow(QMainWindow):
                         "lon": lon,
                         "ele": 0.0,
                         "time": dt_obj,
-                        "confidence": float(it.get("confidence", 0.0))
+                        "confidence": float(it.get("confidence", 0.0)),
+                        # preserve per-frame context if JSON provides it
+                        "context": it.get("context", "anchor")
                     })
 
         if not pts:
@@ -6931,21 +6939,285 @@ class MainWindow(QMainWindow):
                 i = j
             pts = refined
 
-        # outlier removal: replace outliers with midpoint if direct distance (prev, next) < distance (prev, curr)
+        # outlier removal:
+        # - for regular "anchor" points: treat as outlier if inserting them
+        #   between neighbours inflates the path length too much compared to the
+        #   direct distance.
+        # - for "jump_before" points: compare only to previous point and drop
+        #   them if the implied speed is unrealistically high.
         if len(pts) >= 3:
             print(f"\nOutlier removal: checking {len(pts)} points")
+            new_pts = []
+            # always keep first point
+            new_pts.append(pts[0])
+            # iterate over interior points and decide whether to keep or drop
             for i in range(1, len(pts) - 1):
-                prev_pt = pts[i - 1]
+                prev_pt = new_pts[-1]
                 curr_pt = pts[i]
                 next_pt = pts[i + 1]
+                ctx_curr = curr_pt.get("context", "anchor")
+
+                # 1) Handle jump_before points: check prev-only speed (limit ~60 km/h)
+                if ctx_curr == "jump_before":
+                    dt_prev = (curr_pt["time"] - prev_pt["time"]).total_seconds()
+                    if dt_prev > 0:
+                        dist_prev = self._haversine_m(
+                            prev_pt["lat"], prev_pt["lon"],
+                            curr_pt["lat"], curr_pt["lon"]
+                        )
+                        speed = dist_prev / dt_prev  # m/s
+                        print(
+                            f"jump_before point {i} (t={curr_pt['time'].timestamp():.1f}): "
+                            f"dt_prev={dt_prev:.1f}s, dist_prev={dist_prev:.1f}m, speed={speed:.2f}m/s",
+                            end=""
+                        )
+                        # heuristic: >16.7 m/s (~60 km/h) is unrealistic for our use case
+                        if speed > 16.7:
+                            print(" → UNREALISTIC, removing jump_before")
+                            # drop this point
+                            continue
+                        else:
+                            print()
+                    # additional geometric check with neighbours, same as for anchors:
+                    dist_prev_curr = self._haversine_m(prev_pt["lat"], prev_pt["lon"], curr_pt["lat"], curr_pt["lon"])
+                    dist_curr_next = self._haversine_m(curr_pt["lat"], curr_pt["lon"], next_pt["lat"], next_pt["lon"])
+                    dist_prev_next = self._haversine_m(prev_pt["lat"], prev_pt["lon"], next_pt["lat"], next_pt["lon"])
+                    total_with_mid = dist_prev_curr + dist_curr_next
+                    if total_with_mid > 1.5 * dist_prev_next:
+                        print(" → GEOM-OUTLIER jump_before, removing point")
+                        continue
+                    # keep reasonable jump_before point
+                    new_pts.append(curr_pt)
+                    continue
+
+                # 2) Handle jump_after points: check next-only speed (limit ~60 km/h)
+                if ctx_curr == "jump_after":
+                    dt_next = (next_pt["time"] - curr_pt["time"]).total_seconds()
+                    if dt_next > 0:
+                        dist_next = self._haversine_m(
+                            curr_pt["lat"], curr_pt["lon"],
+                            next_pt["lat"], next_pt["lon"]
+                        )
+                        speed = dist_next / dt_next  # m/s
+                        print(
+                            f"jump_after point {i} (t={curr_pt['time'].timestamp():.1f}): "
+                            f"dt_next={dt_next:.1f}s, dist_next={dist_next:.1f}m, speed={speed:.2f}m/s",
+                            end=""
+                        )
+                        # heuristic: >16.7 m/s (~60 km/h) is unrealistic for our use case
+                        if speed > 16.7:
+                            print(" → UNREALISTIC, removing jump_after")
+                            # drop this point
+                            continue
+                        else:
+                            print()
+                    # additional geometric check with neighbours, same as for anchors:
+                    dist_prev_curr = self._haversine_m(prev_pt["lat"], prev_pt["lon"], curr_pt["lat"], curr_pt["lon"])
+                    dist_curr_next = self._haversine_m(curr_pt["lat"], curr_pt["lon"], next_pt["lat"], next_pt["lon"])
+                    dist_prev_next = self._haversine_m(prev_pt["lat"], prev_pt["lon"], next_pt["lat"], next_pt["lon"])
+                    total_with_mid = dist_prev_curr + dist_curr_next
+                    if total_with_mid > 1.5 * dist_prev_next:
+                        print(" → GEOM-OUTLIER jump_after, removing point")
+                        continue
+                    # keep reasonable jump_after point
+                    new_pts.append(curr_pt)
+                    continue
+
+                # 3) Other non-anchor contexts are left untouched
+                #    Treat any 'motion_*' context like anchor for the next step.
+                if ctx_curr not in ("anchor", "motion_before", "motion_after"):
+                    new_pts.append(curr_pt)
+                    continue
+
+                # 4) Regular anchor (and motion_* points): combined geometric + speed-based outlier check (limit ~60 km/h)
                 dist_prev_curr = self._haversine_m(prev_pt["lat"], prev_pt["lon"], curr_pt["lat"], curr_pt["lon"])
+                dist_curr_next = self._haversine_m(curr_pt["lat"], curr_pt["lon"], next_pt["lat"], next_pt["lon"])
                 dist_prev_next = self._haversine_m(prev_pt["lat"], prev_pt["lon"], next_pt["lat"], next_pt["lon"])
-                print(f"Point {i} (t={curr_pt['time'].timestamp():.1f}): dist_prev-curr={dist_prev_curr:.1f}m, dist_prev-next={dist_prev_next:.1f}m", end="")
-                if dist_prev_next < dist_prev_curr:
-                    # outlier detected: replace with midpoint
-                    print(f" → OUTLIER, replacing with midpoint")
-                    pts[i]["lat"] = (prev_pt["lat"] + next_pt["lat"]) / 2
-                    pts[i]["lon"] = (prev_pt["lon"] + next_pt["lon"]) / 2
+
+                dt_prev = (curr_pt["time"] - prev_pt["time"]).total_seconds()
+                dt_next = (next_pt["time"] - curr_pt["time"]).total_seconds()
+
+                speed_prev = dist_prev_curr / dt_prev if dt_prev > 0 else float("inf")
+                speed_next = dist_curr_next / dt_next if dt_next > 0 else float("inf")
+
+                total_with_mid = dist_prev_curr + dist_curr_next
+
+                print(
+                    f"Point {i} (t={curr_pt['time'].timestamp():.1f}): "
+                    f"prev-curr={dist_prev_curr:.1f}m ({speed_prev:.2f}m/s), "
+                    f"curr-next={dist_curr_next:.1f}m ({speed_next:.2f}m/s), "
+                    f"prev-next={dist_prev_next:.1f}m, total_with_mid={total_with_mid:.1f}m",
+                    end=""
+                )
+
+                # Heuristics (speed limit ~16.7 m/s ≈ 60 km/h):
+                # - geometric: if inserting the middle point inflates the path length
+                #   too much vs direct neighbour distance (factor ~1.5)
+                # - speed: if either segment speed exceeds a realistic upper bound
+                #   (~25 m/s ≈ 90 km/h)
+                geom_outlier = total_with_mid > 1.5 * dist_prev_next
+                speed_outlier = (speed_prev > 16.7) or (speed_next > 16.7)
+
+                if geom_outlier or speed_outlier:
+                    print(" → OUTLIER, removing point")
+                    # simply do not append curr_pt -> it is dropped
+                    continue
+                else:
+                    print()
+                    new_pts.append(curr_pt)
+
+            # always keep last point
+            new_pts.append(pts[-1])
+            pts = new_pts
+
+        # second pass: collapse near-duplicates in time/space
+        # If two consecutive points are very close in time (<=15 s) AND space (<=10 m),
+        # keep only the first point.
+        if len(pts) >= 2:
+            print(f"\nDuplicate filtering: checking {len(pts)} points for small moves")
+            filtered_pts = []
+            last_kept = pts[0]
+            filtered_pts.append(last_kept)
+            for i in range(1, len(pts)):
+                curr_pt = pts[i]
+                dt = (curr_pt["time"] - last_kept["time"]).total_seconds()
+                dist = self._haversine_m(
+                    last_kept["lat"], last_kept["lon"],
+                    curr_pt["lat"], curr_pt["lon"]
+                )
+                # treat movements within 15 s AND 10 m (inclusive) as duplicates
+                if dt <= 15.0 and dist <= 10.0:
+                    # very small move over short time window -> treat as duplicate, skip
+                    print(
+                        f"Skipping near-duplicate at index {i}: dt={dt:.1f}s, dist={dist:.1f}m"
+                    )
+                    continue
+                filtered_pts.append(curr_pt)
+                last_kept = curr_pt
+            pts = filtered_pts
+
+        # final pass: global speed sanity check on the already filtered track
+        # We walk through consecutive points and ensure that the implied speed
+        # does not exceed ~60 km/h (16.7 m/s), with one exception:
+        # - very high speed *into* a jump_after/motion_after is allowed
+        #   (video cut), but very high speed *out of* such a point is not.
+        if len(pts) >= 2:
+            print(f"\nGlobal speed check: checking {len(pts)} points")
+            final_pts = [pts[0]]
+            last_kept = pts[0]
+            for i in range(1, len(pts)):
+                curr_pt = pts[i]
+                dt = (curr_pt["time"] - last_kept["time"]).total_seconds()
+                if dt <= 0:
+                    # non-positive time difference – keep current and move on
+                    final_pts.append(curr_pt)
+                    last_kept = curr_pt
+                    continue
+                dist = self._haversine_m(
+                    last_kept["lat"], last_kept["lon"],
+                    curr_pt["lat"], curr_pt["lon"]
+                )
+                speed = dist / dt
+                print(
+                    f"Global speed check between idx? and {i}: dt={dt:.1f}s, dist={dist:.1f}m, speed={speed:.2f}m/s",
+                    end=""
+                )
+
+                # Allow arbitrarily high speed INTO a jump_after/motion_after
+                # (cut boundary), but enforce the limit for all other segments.
+                ctx_curr = curr_pt.get("context", "anchor")
+                ctx_last = last_kept.get("context", "anchor")
+
+                if speed > 16.7:
+                    # Only real video cuts (jump_after) are treated as cut markers.
+                    cut_set = ("jump_after",)
+                    if ctx_last in cut_set and ctx_curr in cut_set:
+                        # High speed between two cut markers:
+                        # prefer the later one, drop the earlier.
+                        print(" → high between cuts, dropping previous jump_after point")
+                        final_pts[-1] = curr_pt
+                        last_kept = curr_pt
+                        continue
+
+                    if ctx_curr in cut_set:
+                        # High speed *into* a jump_after/motion_after from a non-cut
+                        # is accepted (video cut boundary).
+                        print(" → high, but allowed into jump_after/motion_after")
+                        final_pts.append(curr_pt)
+                        last_kept = curr_pt
+                        continue
+
+                    if ctx_last in cut_set:
+                        # High speed *out of* a jump_after into non-cut:
+                        # drop the cut point and keep the current one.
+                        print(" → high, removing previous jump_after point")
+                        final_pts[-1] = curr_pt
+                        last_kept = curr_pt
+                        continue
+
+                    # Generic case: drop the current point as unrealistic.
+                    print(" → high, dropping current point")
+                    continue
+
+                print()
+                final_pts.append(curr_pt)
+                last_kept = curr_pt
+
+            pts = final_pts
+
+        # final-final pass: global geometric sanity check (all contexts)
+        # Re-run a simplified geometric outlier detection on the final sequence:
+        # if going through a middle point inflates the path length too much
+        # compared to the direct neighbour distance, drop that middle point.
+        if len(pts) >= 3:
+            print(f"\nGlobal geometric check: checking {len(pts)} points")
+            geo_pts = [pts[0]]
+            for i in range(1, len(pts) - 1):
+                prev_pt = geo_pts[-1]
+                curr_pt = pts[i]
+                next_pt = pts[i + 1]
+
+                dist_prev_curr = self._haversine_m(prev_pt["lat"], prev_pt["lon"], curr_pt["lat"], curr_pt["lon"])
+                dist_curr_next = self._haversine_m(curr_pt["lat"], curr_pt["lon"], next_pt["lat"], next_pt["lon"])
+                dist_prev_next = self._haversine_m(prev_pt["lat"], prev_pt["lon"], next_pt["lat"], next_pt["lon"])
+
+                total_with_mid = dist_prev_curr + dist_curr_next
+                print(
+                    f"Geo-check point (t={curr_pt['time'].timestamp():.1f}): "
+                    f"prev-curr={dist_prev_curr:.1f}m, curr-next={dist_curr_next:.1f}m, "
+                    f"prev-next={dist_prev_next:.1f}m, total_with_mid={total_with_mid:.1f}m",
+                    end=""
+                )
+
+                if total_with_mid > 1.5 * dist_prev_next:
+                    print(" → GEOM-OUTLIER, removing")
+                    # drop curr_pt
+                    continue
+                else:
+                    print()
+                    geo_pts.append(curr_pt)
+
+            # always keep last point
+            geo_pts.append(pts[-1])
+            pts = geo_pts
+
+        # tail sanity: drop a clearly unrealistic final jump
+        # If the speed from the penultimate to the last point exceeds ~60 km/h,
+        # remove the very last point.
+        if len(pts) >= 2:
+            last = pts[-1]
+            prev = pts[-2]
+            dt_tail = (last["time"] - prev["time"]).total_seconds()
+            if dt_tail > 0:
+                dist_tail = self._haversine_m(prev["lat"], prev["lon"], last["lat"], last["lon"])
+                speed_tail = dist_tail / dt_tail
+                print(
+                    f"Tail check: last segment dt={dt_tail:.1f}s, dist={dist_tail:.1f}m, speed={speed_tail:.2f}m/s",
+                    end=""
+                )
+                if speed_tail > 16.7:
+                    print(" → removing last point as outlier")
+                    pts = pts[:-1]
                 else:
                     print()
 
