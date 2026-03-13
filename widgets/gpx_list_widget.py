@@ -689,6 +689,24 @@ class GPXListWidget(QWidget):
     # 4) GPX-Daten
     # ---------------------------------------------------
     def set_gpx_data(self, data):
+        """
+        Ersetzt den kompletten GPX-Datensatz und baut die Tabelle neu auf.
+        Versucht, eine vorherige Zeilenauswahl (falls vorhanden) sinnvoll
+        wiederherzustellen – auch wenn sich die Indizes durch Operationen
+        wie „Route erstellen“ geändert haben.
+        """
+        # Aktuelle Auswahl/Zeile + zugehörige Zeit merken, falls vorhanden
+        try:
+            prev_row = self.table.currentRow()
+        except Exception:
+            prev_row = -1
+        prev_target_time = None
+        try:
+            if 0 <= prev_row < len(self._gpx_times):
+                prev_target_time = float(self._gpx_times[prev_row])
+        except Exception:
+            prev_target_time = None
+
         self._begin_table_update()
         try:
             self._gpx_data = data
@@ -761,6 +779,26 @@ class GPXListWidget(QWidget):
             
             if hasattr(self, "_dnd_overlay"):
                 self._dnd_overlay.hide()
+            
+            # Nach dem Neuaufbau versuchen wir, die „gleiche“ Zeile wieder auszuwählen.
+            # Falls sich durch „Route erstellen“ o.ä. die Indizes verschoben haben,
+            # suchen wir die Zeile mit der ähnlichsten relativen Zeit.
+            try:
+                if prev_target_time is not None and self._gpx_times:
+                    best_idx = 0
+                    best_diff = abs(float(self._gpx_times[0]) - prev_target_time)
+                    for i, t in enumerate(self._gpx_times):
+                        diff = abs(float(t) - prev_target_time)
+                        if diff < best_diff:
+                            best_diff = diff
+                            best_idx = i
+                    if 0 <= best_idx < self.table.rowCount():
+                        self.select_row_in_pause(best_idx)
+                elif 0 <= prev_row < self.table.rowCount():
+                    # Fallback: alter Index
+                    self.select_row_in_pause(prev_row)
+            except Exception:
+                pass
     # ----------------------------
     # Drag&Drop (GPX/FIT)
     # ----------------------------
