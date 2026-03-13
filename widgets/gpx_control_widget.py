@@ -1855,30 +1855,47 @@ class GPXControlWidget(QWidget):
             orig_min = min(gpx_data[i]["ele"] for i in range(seg_start, seg_end + 1))
             new_min = min(new_ele)
 
+            # 1) Verhindere, dass die geglättete Kurve UNTER das ursprüngliche Minimum fällt
             if new_min < orig_min:
                 lift = orig_min - new_min
                 new_ele = [e + lift for e in new_ele]
+                new_min = min(new_ele)
+
+            # 2) Harte Untergrenze 0 m: keine negativen Höhen zulassen
+            if new_min < 0.0:
+                lift0 = -new_min
+                new_ele = [e + lift0 for e in new_ele]
 
             # --- write back only segment ---
             for j in range(length):
                 gpx_data[seg_start + j]["ele"] = new_ele[j]
 
-            # --- Post-smoothing realignment ---
-            for seg_idx in range(1, len(segments)):
-                prev_start, prev_end = segments[seg_idx - 1]
-                cur_start, cur_end   = segments[seg_idx]
+        # --- Post-smoothing realignment across segments (once) ---
+        for seg_idx in range(1, len(segments)):
+            prev_start, prev_end = segments[seg_idx - 1]
+            cur_start, cur_end   = segments[seg_idx]
 
-                anchor_ele = gpx_data[prev_end]["ele"]
-                delta = anchor_ele - gpx_data[cur_start]["ele"]
+            anchor_ele = gpx_data[prev_end]["ele"]
+            delta = anchor_ele - gpx_data[cur_start]["ele"]
 
-                # optional safety threshold
-                if abs(delta) < 30.0:
-                    for i in range(cur_start, cur_end + 1):
-                        gpx_data[i]["ele"] += delta
+            # optional safety threshold
+            if abs(delta) < 30.0:
+                for i in range(cur_start, cur_end + 1):
+                    gpx_data[i]["ele"] += delta
 
+        # --- Final global clamp: avoid negative elevations at all ---
+        try:
+            global_min = min(float(pt.get("ele", 0.0)) for pt in gpx_data)
+        except Exception:
+            global_min = 0.0
+        if global_min < 0.0:
+            lift_all = -global_min
+            for pt in gpx_data:
+                try:
+                    pt["ele"] = float(pt.get("ele", 0.0)) + lift_all
+                except Exception:
+                    continue
 
-
-        
     # ===========  NEU am Ende von mainwindow.py ============    
     
     
