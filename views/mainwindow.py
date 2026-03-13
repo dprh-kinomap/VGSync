@@ -512,6 +512,10 @@ class MainWindow(QMainWindow):
         self._autoSyncVideoEnabled = False
         self._autoSyncNewPointsWithVideoTime = False
         self.user_wants_editing = user_wants_editing
+
+        # Projekt-/Autosave-Status
+        self._current_project_path: str | None = None
+        self._project_dirty: bool = False
         
         
         
@@ -626,6 +630,12 @@ class MainWindow(QMainWindow):
         render_action.setStatusTip("Export in Copy-Mode or Encode-Mode the edited Video.")
         render_action.triggered.connect(self.on_render_clicked)
         file_menu.addAction(render_action)
+
+        # Autosave-Timer (alle 5 Minuten)
+        self._autosave_timer = QTimer(self)
+        self._autosave_timer.setInterval(5 * 60 * 1000)  # 5 Minuten
+        self._autosave_timer.timeout.connect(self._on_autosave_timeout)
+        self._autosave_timer.start()
 
         # --- Shortcuts-Menü (ehemals "Edit") ---
         shortcuts_menu = menubar.addMenu("Edit")
@@ -2505,6 +2515,9 @@ class MainWindow(QMainWindow):
         
 
         print(f"[INFO] Inserted new GPX point (DirectionsEnabled={self._directions_enabled}); total now {len(gpx_data)} pts.")
+
+        # Projekt als geändert markieren (für Autosave)
+        self._project_dirty = True
         
     def askSwitchCreateMode(self):
         answer = QMessageBox.question(
@@ -2532,6 +2545,9 @@ class MainWindow(QMainWindow):
         if row >= 0:
             self.map_widget.set_selected_point(row)
             print(f"[UNDO] Punkt {row} nach Undo erneut in Map selektiert")
+
+        # Undo stellt den Projektzustand wieder her – wir markieren ihn als "sauber"
+        self._project_dirty = False
 
             
     
@@ -6051,6 +6067,9 @@ class MainWindow(QMainWindow):
             set_gpx_video_shift(video_time)
 
         gpx_data.insert(insert_pos, new_pt)
+
+        # Projekt als geändert markieren (für Autosave)
+        self._project_dirty = True
         
         return insert_pos  # Index des neuen Punktes in gpx_data
         
@@ -6081,6 +6100,9 @@ class MainWindow(QMainWindow):
             self.map_widget.loadRoute(route_geojson, do_fit=False)
 
         self._undo_stack.append(undo)
+
+        # jede Änderung, für die wir ein Undo registrieren, markiert das Projekt als geändert
+        self._project_dirty = True
 
     def register_video_undo_snapshot(self,appendToLast: bool = False):
         snapshot = copy.deepcopy(self.cut_manager._cut_intervals)
@@ -6123,6 +6145,17 @@ class MainWindow(QMainWindow):
             return
         if not filename.endswith(".KVRouiteproj"):
             filename += ".KVRouiteproj"
+
+        if self._write_project_to_path(filename, show_message=True):
+            # Bei Erfolg: aktuellen Projektpfad setzen und Dirty-Flag zurücksetzen
+            self._current_project_path = filename
+            self._project_dirty = False
+
+    def _collect_project_data(self) -> dict:
+        """
+        Stellt die aktuellen Projekt-Daten als Dictionary zusammen.
+        Wird von save_project und Autosave verwendet.
+        """
         project_data = {
             "playlist": self.playlist,
             "video_durations": self.video_durations,
@@ -6136,17 +6169,48 @@ class MainWindow(QMainWindow):
             "overlays": self._overlay_manager.get_all_overlays(),
             "edit_mode": self._edit_mode
         }
-        
+
         if is_gpx_video_shift_set():
-            project_data["gpx_video_shift"]= get_gpx_video_shift() 
-    
+            project_data["gpx_video_shift"] = get_gpx_video_shift()
+
+        return project_data
+
+    def _write_project_to_path(self, path: str, show_message: bool = False) -> bool:
+        """
+        Schreibt das aktuelle Projekt nach 'path'.
+        show_message steuert, ob ein QMessageBox-Hinweis angezeigt wird.
+        Gibt True bei Erfolg, False bei Fehler zurück.
+        """
+        project_data = self._collect_project_data()
         try:
-            with open(filename, "w", encoding="utf-8") as f:
+            with open(path, "w", encoding="utf-8") as f:
                 json.dump(project_data, f, indent=2, default=str)
-            QMessageBox.information(self, "Project Saved", f"Project saved to:\n{filename}")
-            self.save_recent_file(filename)
+            if show_message:
+                QMessageBox.information(self, "Project Saved", f"Project saved to:\n{path}")
+            self.save_recent_file(path)
+            return True
         except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to save project:\n{e}")
+            if show_message:
+                QMessageBox.critical(self, "Error", f"Failed to save project:\n{e}")
+            else:
+                print(f"[WARN] Autosave failed for '{path}': {e}")
+            return False
+
+    def _on_autosave_timeout(self):
+        """
+        Wird periodisch vom Autosave-Timer aufgerufen.
+        Speichert das Projekt automatisch, falls ein Pfad existiert und Änderungen vorliegen.
+        """
+        if not self._current_project_path:
+            return
+        if not self._project_dirty:
+            return
+
+        autosave_path = self._current_project_path + ".autosave"
+        print(f"[DEBUG] Autosave to {autosave_path}")
+        if self._write_project_to_path(autosave_path, show_message=False):
+            # Autosave belässt das Hauptprojekt als "dirty", dient nur als Sicherheitskopie
+            pass
 
         
     
@@ -6169,8 +6233,6 @@ class MainWindow(QMainWindow):
             if file_ext.endswith('.kvrouiteproj') or file_ext.endswith('.vgsyncproj'):
                 # Deine existierende Projekt-Lade-Logik hier aufrufen
                 # (die Logik, die du bereits in load_project hattest)
-                
-                #self._load_project_file(file_path)
                 self.process_open_project(file_path)
                 self.save_recent_file(file_path)
             else:
@@ -6305,7 +6367,9 @@ class MainWindow(QMainWindow):
             self.timeline.update()
             self._rebuild_playlist_menu()
 
-            #QMessageBox.information(self, "Project Loaded", f"Project loaded from:\n{filename}")
+            # Projektpfad und Dirty-Flag aktualisieren
+            self._current_project_path = filename
+            self._project_dirty = False
 
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to load project:\n{e}")
