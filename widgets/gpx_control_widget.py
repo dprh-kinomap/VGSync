@@ -219,6 +219,13 @@ class GPXControlWidget(QWidget):
         
         action_set_height_b2e = self.more_menu.addAction("setHeight(B2E)")
         action_set_height_b2e.triggered.connect(self.on_setHeight_B2E_clicked)
+
+        action_flatten = self.more_menu.addAction("Flatten")
+        action_flatten.setToolTip(
+            "Flatten a local elevation bump or cuvette between markB and markE\n"
+            "by interpolating between the elevations before and after the range."
+        )
+        action_flatten.triggered.connect(self.on_cut_hill_clicked)
         
         action_resample = self.more_menu.addAction("Resample to 1s")
         action_resample.triggered.connect(self._on_resample_to_1s_clicked)
@@ -571,6 +578,103 @@ class GPXControlWidget(QWidget):
         btn_ok.clicked.connect(on_ok_dialog)
         btn_cancel.clicked.connect(on_cancel_dialog)
         dlg.exec()
+
+
+    def on_cut_hill_clicked(self):
+        """
+        'Cuts' a small hill/bridge artifact in the elevation profile.
+
+        Takes the currently marked GPX range [markB..markE] and linearly
+        interpolates the elevation between the point BEFORE the range and
+        the point AFTER the range, so that the selected bump is flattened.
+        """
+        mw = self._mainwindow
+        if not mw:
+            return
+
+        gpx_data = mw.gpx_widget.gpx_list._gpx_data
+        if not gpx_data:
+            QMessageBox.warning(self, "No GPX Data", "No GPX data available.")
+            return
+
+        n = len(gpx_data)
+        if n < 3:
+            QMessageBox.warning(self, "Too few points", "At least 3 GPX points are required.")
+            return
+
+        b_idx = mw.gpx_widget.gpx_list._markB_idx
+        e_idx = mw.gpx_widget.gpx_list._markE_idx
+
+        if b_idx is None or e_idx is None:
+            QMessageBox.warning(self, "No Range Selected",
+                                "Please mark a range (markB..markE) first.")
+            return
+
+        # Ensure b_idx <= e_idx
+        if b_idx > e_idx:
+            b_idx, e_idx = e_idx, b_idx
+
+        if (e_idx - b_idx) < 0:
+            QMessageBox.warning(self, "Invalid Range",
+                                "The selected range must contain at least 1 point.")
+            return
+
+        # Determine outer indices: one before B and one after E
+        start_idx = max(0, b_idx - 1)
+        end_idx = min(n - 1, e_idx + 1)
+
+        if end_idx - start_idx < 2:
+            QMessageBox.warning(
+                self,
+                "Range too small",
+                "Need at least one point before and one point after the selected range."
+            )
+            return
+
+        start_ele = float(gpx_data[start_idx].get("ele", 0.0))
+        end_ele = float(gpx_data[end_idx].get("ele", 0.0))
+
+        # Undo snapshot
+        self.register_gpx_undo_snapshot()
+
+        steps = end_idx - start_idx
+        # Linearly interpolate between start_idx and end_idx
+        for i in range(start_idx + 1, end_idx):
+            # Only touch points inside the original selected range
+            if b_idx <= i <= e_idx:
+                frac = (i - start_idx) / float(steps)
+                new_ele = start_ele + frac * (end_ele - start_ele)
+                gpx_data[i]["ele"] = new_ele
+
+        # Recalculate derived GPX fields and refresh UI
+        recalc_gpx_data(gpx_data)
+        mw.gpx_widget.set_gpx_data(gpx_data)
+        mw._gpx_data = gpx_data
+        mw._update_gpx_overview()
+
+        mw.chart.set_gpx_data(gpx_data)
+        if mw.mini_chart_widget:
+            mw.mini_chart_widget.set_gpx_data(gpx_data)
+
+        # Auswahl / Markierungen nach der Operation zurücksetzen
+        mw.gpx_widget.gpx_list.clear_marked_range()
+        if hasattr(mw.map_widget, "clear_marked_range"):
+            mw.map_widget.clear_marked_range()
+
+        # Marker-Indices zurücksetzen
+        mw.gpx_widget.gpx_list._markB_idx = None
+        mw.gpx_widget.gpx_list._markE_idx = None
+
+        # Button-Styles zurücksetzen
+        self.markB_button.setStyleSheet("")
+        self.markE_button.setStyleSheet("")
+
+        QMessageBox.information(
+            self,
+            "Done",
+            f"Flatten applied to range {b_idx}..{e_idx}.\n"
+            f"Elevation now transitions smoothly from point {start_idx} to {end_idx}."
+        )
     
     
     def update_elevation_from_mapbox(self, latlon_list):

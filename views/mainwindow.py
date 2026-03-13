@@ -608,13 +608,17 @@ class MainWindow(QMainWindow):
         file_menu.addSeparator()
         file_menu.addAction(extract_gopro_gps_action)
         file_menu.addSeparator()
-        
-        
-        
-        save_project_action = QAction("Save Project...", self)
-        save_project_action.setStatusTip("Safe the loaded files and edits as project.")
-        save_project_action.triggered.connect(self.save_project)
-        file_menu.addAction(save_project_action)
+        # --- Project Save / Save As ---
+        self.save_project_action = QAction("Save Project", self)
+        self.save_project_action.setStatusTip("Save the current project to the existing project file.")
+        self.save_project_action.triggered.connect(self.save_project)
+        self.save_project_action.setEnabled(False)  # erst aktivieren, wenn ein Pfad existiert
+        file_menu.addAction(self.save_project_action)
+
+        save_project_as_action = QAction("Save Project As...", self)
+        save_project_as_action.setStatusTip("Save the loaded files and edits as a new project file.")
+        save_project_as_action.triggered.connect(self.save_project_as)
+        file_menu.addAction(save_project_as_action)
 
         save_gpx_action = QAction("Export GPX...", self)
         save_gpx_action.setStatusTip("Safe/Export the edited GPX File.")
@@ -3733,45 +3737,9 @@ class MainWindow(QMainWindow):
         if self.playlist_counter > 1:
             QMessageBox.information(self, "Loaded", f"{len(files)} video(s) added to the playlist.")
 
+        # Beim ersten Video ggf. Edit-Mode-Dialog / 360° / Sync vorschlagen
         if first_load:
-            dlg = QDialog(self)
-            dlg.setWindowTitle(f"Edit video")
-
-            vbox = QVBoxLayout(dlg)
-            lbl = QLabel("Select video edition mode")
-            vbox.addWidget(lbl)
-
-            # Button Box
-            btns = QDialogButtonBox()
-
-            # Add "Copy" button
-            btn_copy = QPushButton("Copy")
-            btns.addButton(btn_copy, QDialogButtonBox.YesRole)
-            btn_copy.clicked.connect(lambda: dlg.done(1))
-
-            # Add "Encode" button
-            btn_encode = QPushButton("Encode")
-            btns.addButton(btn_encode, QDialogButtonBox.ActionRole)
-            btn_encode.clicked.connect(lambda: dlg.done(2) )
-
-            # Add "No Edit" button (acts like Cancel)
-            btn_cancel = QPushButton("No Edit")
-            btns.addButton(btn_cancel, QDialogButtonBox.RejectRole)
-            btn_cancel.clicked.connect(lambda: dlg.reject())
-
-            vbox.addWidget(btns)
-
-            result = dlg.exec()
-            if result == 1:
-                self._set_edit_mode("copy")
-            elif result == 2:
-                self._set_edit_mode("encode")
-
-            w = self.video_editor._player.width
-            h = self.video_editor._player.height
-            if w==h*2 and not self.video_editor.is_360_mode():
-                self._on_toggle_360_from_menu(True)
-            self.proposeVideoGpxSync()
+            self._maybe_prompt_edit_mode_after_first_load()
 
     def proposeVideoGpxSync(self):
         # show only if we have both GPX and at least one video
@@ -4302,11 +4270,6 @@ class MainWindow(QMainWindow):
             self.cut_manager.stop_skip_timer()
 
         else:
-            
-            if not self.cut_manager._has_active_file():
-                if self.playlist:
-                    self.video_editor.show_first_frame_at_index(0)
-            
             if self._video_at_end:
                 # => Wir waren am Ende => also erst "stoppen"
                 self.on_stop()             # ruft dein Stop-Verhalten auf
@@ -5722,6 +5685,10 @@ class MainWindow(QMainWindow):
         self.first_video_frame_shown = False
         self.real_total_duration = 0.0
         self.playlist_counter = 0
+        self._current_project_path = ""
+        self._project_dirty = False
+        if hasattr(self, "save_project_action"):
+            self.save_project_action.setEnabled(False)
 
         # --- 9) Menüs & Views aktualisieren ---
         try:
@@ -6133,18 +6100,42 @@ class MainWindow(QMainWindow):
 
     def save_project(self):
         """
-        Speichert das aktuelle Projekt in eine JSON-Datei.
+        Speichert das aktuelle Projekt in die bestehende Projektdatei.
+        Nur sinnvoll, wenn bereits ein Projektpfad existiert.
         """
-        filename, _ = QFileDialog.getSaveFileName(self, "Save Project", "", "KVRouite Project (*.KVRouiteproj)")
+        if not getattr(self, "_current_project_path", None):
+            # Fallback: wie "Save As..." verhalten
+            self.save_project_as()
+            return
+
+        if self._write_project_to_path(self._current_project_path, show_message=True):
+            self._project_dirty = False
+
+    def save_project_as(self):
+        """
+        Speichert das aktuelle Projekt unter einem neuen Pfad
+        (klassisches 'Save As').
+        """
+        filename, _ = QFileDialog.getSaveFileName(
+            self,
+            "Save Project As",
+            "",
+            "KVRouite Project (*.KVRouiteproj);;VGSync Project (*.vgsyncproj)"
+        )
         if not filename:
             return
-        if not filename.endswith(".KVRouiteproj"):
+        # Standard-Endung setzen, falls keine vorhanden ist
+        lower = filename.lower()
+        if not (lower.endswith(".kvrouiteproj") or lower.endswith(".vgsyncproj")):
             filename += ".KVRouiteproj"
 
         if self._write_project_to_path(filename, show_message=True):
-            # Bei Erfolg: aktuellen Projektpfad setzen und Dirty-Flag zurücksetzen
+            # Bei Erfolg: aktuellen Projektpfad setzen, Dirty-Flag zurücksetzen
             self._current_project_path = filename
             self._project_dirty = False
+            # Ab jetzt kann "Save Project" verwendet werden
+            if hasattr(self, "save_project_action"):
+                self.save_project_action.setEnabled(True)
 
     def _collect_project_data(self) -> dict:
         """
@@ -6247,26 +6238,89 @@ class MainWindow(QMainWindow):
                 "Error Loading Project", 
                 f"Failed to load project file:\n{str(e)}"
             )
+
+    def closeEvent(self, event):
+        """
+        Fragt den Benutzer beim Schließen des Fensters,
+        ob ein geändertes Projekt gespeichert werden soll.
+        """
+        try:
+            if getattr(self, "_project_dirty", False):
+                msg = QMessageBox(self)
+                msg.setWindowTitle("Unsaved Project")
+                msg.setText("The current project has unsaved changes.\nDo you want to save before exiting?")
+                save_btn   = msg.addButton("Save", QMessageBox.AcceptRole)
+                discard_btn = msg.addButton("Discard", QMessageBox.DestructiveRole)
+                cancel_btn  = msg.addButton("Cancel", QMessageBox.RejectRole)
+                msg.setDefaultButton(save_btn)
+                msg.exec()
+
+                clicked = msg.clickedButton()
+                if clicked is save_btn:
+                    # Wenn kein Projektpfad existiert, wie 'Save As' verhalten
+                    if getattr(self, "_current_project_path", None):
+                        self.save_project()
+                    else:
+                        self.save_project_as()
+                    # Nach erfolgreichem Speichern schließen
+                    event.accept()
+                    return
+                elif clicked is discard_btn:
+                    event.accept()
+                    return
+                else:
+                    # Cancel
+                    event.ignore()
+                    return
+        except Exception:
+            # Im Fehlerfall App trotzdem schließen, um nicht hängen zu bleiben
+            event.accept()
+
+        # Kein Dirty-Flag oder schon behandelt
+        super().closeEvent(event)
     
     def process_open_project(self, filename: str):
                     
         try:
             with open(filename, "r", encoding="utf-8") as f:
                 project_data = json.load(f)
-
             
-                
-                
-            # 1. Playlist und Videolängen
-            self.playlist = project_data.get("playlist", [])
-            self.video_durations = project_data.get("video_durations", [])
+            # 1. Playlist laden und ungültige Videopfade herausfiltern
+            raw_playlist = project_data.get("playlist", []) or []
+            valid_playlist: list[str] = []
+            missing_videos: list[str] = []
+            for p in raw_playlist:
+                if p and os.path.exists(p):
+                    valid_playlist.append(p)
+                else:
+                    missing_videos.append(p)
+                    try:
+                        print(f"[WARN] Skipping missing video from project: {p}")
+                    except Exception:
+                        pass
+
+            self.playlist = valid_playlist
+            # Videolängen werden anschließend über rebuild_timeline() per ffprobe neu bestimmt
+            self.video_durations = []
             self.global_keyframes = project_data.get("global_keyframes", [])
-            if self.video_durations:
-                self.real_total_duration = sum(self.video_durations)
-            else:
-                self.real_total_duration = 0.0
-                
-            self.video_durations = project_data.get("video_durations", [])
+            # Falls Videos aus der Playlist entfernt wurden, sind alte Keyframes potentiell ungültig
+            if len(raw_playlist) != len(self.playlist):
+                self.global_keyframes = []
+
+                # Hinweis für den Benutzer anzeigen, welche Videos entfernt wurden
+                if missing_videos:
+                    # Nur Dateinamen zeigen, um den Dialog kurz zu halten
+                    base_names = [os.path.basename(p) for p in missing_videos if p]
+                    msg_list = "\n".join(base_names) if base_names else "\n".join(missing_videos)
+                    QMessageBox.warning(
+                        self,
+                        "Missing videos in project",
+                        "Some videos referenced in this project could not be found on this machine "
+                        "and were removed from the playlist:\n\n"
+                        f"{msg_list}"
+                    )
+
+            # Timeline und Videolängen anhand der (gefilterten) Playlist neu berechnen
             self.rebuild_timeline()
 
             # 2. GPX-Daten laden + reparieren (datetime aus String machen)
@@ -6365,6 +6419,9 @@ class MainWindow(QMainWindow):
             # Projektpfad und Dirty-Flag aktualisieren
             self._current_project_path = filename
             self._project_dirty = False
+            # Ab jetzt kann direkt gespeichert werden
+            if hasattr(self, "save_project_action"):
+                self.save_project_action.setEnabled(True)
 
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to load project:\n{e}")
@@ -6376,12 +6433,13 @@ class MainWindow(QMainWindow):
         self.playlist_menu.addAction(self._playlist_reorder_action)
         self.playlist_menu.addSeparator()
 
-        self.playlist_counter = 1
+        # Zähler immer konsistent zur tatsächlichen Playlist-Länge halten
+        self.playlist_counter = 0
         for filepath in self.playlist:
+            self.playlist_counter += 1
             label_text = f"{self.playlist_counter}: {os.path.basename(filepath)}"
             action = self.playlist_menu.addAction(label_text)
             action.triggered.connect(lambda checked, f=filepath, a=action: self.confirm_remove(f, a))
-            self.playlist_counter += 1
      
         
     def _calculate_cut_total_duration(self):
@@ -6397,6 +6455,10 @@ class MainWindow(QMainWindow):
         return max(0.0, cut_total)
 
     def save_recent_file(self, path: str):
+        # Autosave-Projektdateien nicht in die "Recent Files" aufnehmen
+        if path.lower().endswith(".autosave"):
+            return
+
         s = QSettings("KVRouite", "KVRouite")
         file_history = s.value("file_history", [], type=list)
 
@@ -6437,8 +6499,11 @@ class MainWindow(QMainWindow):
             self.process_open_fit(path)  # default mode="new" passt hier
         elif(path.endswith(".mp4") or path.endswith(".MP4")):
             self.process_open_mp4([path])
-        elif(path.endswith(".KVRouiteproj")):
+        elif(path.lower().endswith(".kvrouiteproj") or path.lower().endswith(".vgsyncproj")):
             self.process_open_project(path)
+        elif(path.lower().endswith(".json")):
+            # Geoinfer / proposals JSON erneut importieren
+            self.import_proposals_json(path)
         else:
             QMessageBox.critical(self, "Error", f"Unsupported file type:\n{path}")
             return
@@ -6814,7 +6879,12 @@ class MainWindow(QMainWindow):
                 )
                 return
             
+            # Erfolgreich geladen → in "Recent Files" aufnehmen und Menü aktualisieren
             self.save_recent_file(file_path)
+            try:
+                self.update_recent_files_menu()
+            except Exception:
+                pass
         
         except Exception as e:
             QMessageBox.critical(
@@ -7888,8 +7958,7 @@ class MainWindow(QMainWindow):
             # kein Dialog, einfach "New"
             self._clear_video_playlist()   # nur Videos leeren (s.u.)
             try:
-                self.process_open_mp4(paths)  
-                self._maybe_prompt_edit_mode_after_first_load() 
+                self.process_open_mp4(paths)
                 try:
                     if paths:
                         self.save_recent_file(paths[0])
