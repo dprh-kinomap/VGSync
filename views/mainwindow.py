@@ -160,7 +160,7 @@ class GoProExtractorDialog(QDialog):
 
         self.current_video_index = 0
         self.is_cancelled = False
-        self._temp_gpx_files = []  # Liste der temporären GPX-Dateien
+        self._temp_gpx_files = []  # list of temporary GPX files
 
 
     def start_extraction(self):
@@ -177,7 +177,7 @@ class GoProExtractorDialog(QDialog):
             return
 
         if self.current_video_index >= len(self.video_list):
-            # Alle Videos fertig -> kombinieren
+            # All videos done -> combine temporary files
             self._combine_all_temp_files()
             return
 
@@ -209,7 +209,7 @@ class GoProExtractorDialog(QDialog):
 
     
     def _process_single_video(self, video_path: str):
-        """Verarbeitet ein einzelnes Video und speichert es als temporäre GPX-Datei"""
+        """Process a single video and save its GPS data as a temporary GPX file."""
         try:
             import gc
             video_duration = get_video_duration(video_path)
@@ -222,15 +222,15 @@ class GoProExtractorDialog(QDialog):
                 self.text_append("✗ No GPS metadata found in video")
                 return None
     
-            # Rohpunkte extrahieren (Liste von Tuples (lat,lon,alt,datetime))
+            # Extract raw points (list of tuples (lat, lon, alt, datetime))
             points = parse_gps5_data(metadata)
             if not points:
                 self.text_append("✗ No GPS points extracted")
                 return None
     
             # -------------------------------------------------------
-            # 1) Sofort in Temp JSON speichern (RAM entlasten)
-            #    save_temp_points kommt aus core.gopro_extractor
+            # 1) Immediately write to temp JSON (free RAM)
+            #    save_temp_points comes from core.gopro_extractor
             # -------------------------------------------------------
             try:
                 from core.gopro_extractor import save_temp_points, load_temp_points
@@ -239,7 +239,7 @@ class GoProExtractorDialog(QDialog):
                 temp_json_path = None
                 self.text_append(f"⚠ Could not save temp JSON: {e}")
     
-            # RAM freigeben (Metadata + raw points)
+            # Free RAM (metadata + raw points)
             try:
                 del metadata
                 del points
@@ -248,12 +248,12 @@ class GoProExtractorDialog(QDialog):
             gc.collect()
     
             # -------------------------------------------------------
-            # 2) Lade die Punkte (als dicts mit datetime) - nur jetzt
+            # 2) Load the points (as dicts with datetime) only now
             # -------------------------------------------------------
             if temp_json_path:
                 points_dict = load_temp_points(temp_json_path)
             else:
-                # Fallback: falls save fehlgeschlagen, versuche nochmal parse direkt
+                # Fallback: if saving failed, try to parse again directly
                 points = parse_gps5_data(extract_metadata(video_path))
                 points_dict = [
                     {"lat": lat, "lon": lon, "ele": alt, "time": timestamp}
@@ -265,12 +265,12 @@ class GoProExtractorDialog(QDialog):
                 return None
     
             # -------------------------------------------------------
-            # 3) Video-Dauer grob anpassen (>0,5s)
+            # 3) Roughly adjust to video duration (>0.5s)
             # -------------------------------------------------------
             points_adjusted = adjust_gpx_to_video_duration(points_dict, video_duration)
     
             # -------------------------------------------------------
-            # 4) Resample auf 1 Hz (import lokal, bereits vorhanden)
+            # 4) Resample to 1 Hz (local helper, already available)
             # -------------------------------------------------------
             try:
                 from core.gopro_extractor import resample_to_1s_auto
@@ -315,9 +315,9 @@ class GoProExtractorDialog(QDialog):
     
     def extend_last_point_to_video(self, points, video_duration):
         """
-        Stellt sicher, dass die letzte GPX-Zeit dem Video entspricht.
-        Fügt die Differenz in Millisekunden nur dem letzten Punkt hinzu.
-        Keine Interpolation von lat/lon/ele.
+        Ensure that the last GPX timestamp matches the video duration.
+        Adds the remaining difference in milliseconds only to the last point.
+        Does not interpolate lat/lon/ele.
         """
         if not points or len(points) < 1:
             return points
@@ -335,7 +335,7 @@ class GoProExtractorDialog(QDialog):
         
 
     def _combine_all_temp_files(self):
-        """Kombiniert alle temporären GPX-Dateien mit korrekter Zeitfortführung"""
+        """Combine all temporary GPX files while preserving correct time continuity."""
         self.text_append("\n✓ All videos processed successfully!")
         if not self._temp_gpx_files:
             self.text_append("✗ No GPS data found in any video.")
@@ -3215,9 +3215,11 @@ class MainWindow(QMainWindow):
         if not data:
             return {"type": "FeatureCollection", "features": []}
         """
-        data: Liste von Dicts => [{'lat':..., 'lon':...}, ...]
-        Gibt FeatureCollection mit 1x Linestring + Nx Points zurück,
-        wobei jeder Point => properties.index = i hat.
+        Build a GeoJSON-like FeatureCollection from a list of coordinate dicts.
+
+        data: list of dicts => [{'lat': ..., 'lon': ...}, ...]
+        Returns a FeatureCollection with one LineString and N Points,
+        where each point has properties.index = i.
         """
         features = []
         positive_time = data[0].get("time") or 0.0
@@ -3283,9 +3285,10 @@ class MainWindow(QMainWindow):
     
     def on_markB_clicked_video(self):
         """
-        Setzt MarkB aus dem VideoControl.
-        - Falls AutoSync=OFF: Nur Video-Markierung setzen, keine GPX-Markierung
-        - Falls AutoSync=ON: berechne final_s und markiere den besten GPX-Index (closest).
+        Set MarkB from the video control.
+
+        - If AutoSync is OFF: only set the video marker, no GPX marker.
+        - If AutoSync is ON: compute final_s and mark the closest matching GPX index.
         """
         # Kein Video/GPX -> Abbruch
         if not self._autoSyncVideoEnabled:
@@ -4027,11 +4030,11 @@ class MainWindow(QMainWindow):
         self.check_and_handle_video_end()        
         
         """
-        Wird periodisch aufgerufen (z.B. alle 200ms) und aktualisiert:
-        - Timeline:   Setzt den Marker
-        - VideoEditor-Label:  Zeigt die aktuelle Zeit
-        - VideoControl:       Setzt h:m:s
-        - GPX/Map/Chart:      Wandert mit, solange is_playing=True
+        Called periodically (e.g. every 200 ms) and updates:
+        - Timeline:            positions the marker
+        - VideoEditor label:   shows the current time
+        - VideoControl:        updates h:m:s
+        - GPX/Map/Chart:       follow along while is_playing=True
         """
         # 1) Aktuelle (globale) Videoposition abfragen:
         global_s = self.video_editor.get_current_global_time()
@@ -4089,9 +4092,9 @@ class MainWindow(QMainWindow):
     
     def _on_chart_marker_clicked(self, index: int):
         """
-        Wird aufgerufen, wenn man im ChartWidget an Position index klickt.
-        => Dann selektieren wir diesen index in gpx_list und Map, 
-        und ggf. Video an diese Stelle spulen.
+        Called when the user clicks at position `index` in the ChartWidget.
+        Selects this index in the GPX list and map and, if appropriate,
+        seeks the video to that position.
         """
         print(f"[DEBUG] _on_chart_marker_clicked => idx={index}")
         # 1) gpx_list => select_row_in_pause
@@ -4131,7 +4134,7 @@ class MainWindow(QMainWindow):
             if self._edit_mode in ("copy", "encode") and (not self._userDeclinedIndexing):
                 self.start_indexing_process(filepath)
             else:
-                print("[DEBUG] Kein Indexing, weil der User es abgelehnt hat oder EditVideo=OFF.")                
+                print("[DEBUG] No indexing because user declined or EditVideo=OFF.")                
            
 
     def confirm_remove(self, filepath, action):
@@ -4200,7 +4203,7 @@ class MainWindow(QMainWindow):
             return 0.0
 
     def run_merge(self, video_path, csv_file, temp_dir):
-        print("[DEBUG] run_merge => direkt merge_keyframes_incremental aufrufen ...")
+        print("[DEBUG] run_merge => directly call merge_keyframes_incremental ...")
         offset_value = self._get_offset_for_filepath(video_path)
         label = os.path.basename(video_path)
         json_file = os.path.join(temp_dir, "merged_keyframes.json")
@@ -4241,10 +4244,10 @@ class MainWindow(QMainWindow):
 
             self.global_keyframes.extend(new_kfs)
             self.global_keyframes = sorted(set(self.global_keyframes))
-            print("[DEBUG] %d Keyframes global geladen (gesamt)." % len(self.global_keyframes))
+            print("[DEBUG] %d keyframes loaded globally (total)." % len(self.global_keyframes))
 
         except Exception as e:
-            print("[DEBUG] Fehler beim Laden der JSON:", e)
+            print("[DEBUG] Error while loading merged_keyframes.json:", e)
 
     # -----------------------------------------------------------------------
     # Marker- und Player-Funktionen ...
@@ -4297,24 +4300,24 @@ class MainWindow(QMainWindow):
             total_duration = self.real_total_duration
             cut_intervals = getattr(self.cut_manager, "_cut_intervals", [])
 
-            # Finale Endposition bestimmen (Ende des letzten Keep-Segments)
+            # Determine final end position (end of the last keep segment)
             final_end_position = total_duration
             if cut_intervals:
                 keep_intervals = self._compute_keep_intervals(cut_intervals, total_duration)
                 if keep_intervals:
                     final_end_position = keep_intervals[-1][1]
 
-            # Endcut vorhanden?
+            # Is there an end cut?
             has_endcut = abs(final_end_position - total_duration) > 0.1
             
-            # Stabil pausieren & UI setzen, aber NICHT als 'am Ende' markieren
+            # Pause and update UI in a stable way, but do NOT mark as "at end"
             self._handle_video_end_state(mark_as_end=False)
-            # Optional Popup wie in der Laufzeit-Erkennung
+            # Optional popup as in the runtime detection
             #if has_endcut and getattr(self, "action_show_endcut", None) and self.action_show_endcut.isChecked():
             #    if getattr(self, "action_show_endcut_warning", None) and self.action_show_endcut_warning.isChecked():
             #        self._show_endcut_popup(final_end_position)
 
-            # Mehrfacher Jump für exaktes Einrasten
+            # Multiple jumps for robust seeking to the exact end position
             QTimer.singleShot(10,  lambda: self.video_editor._jump_to_global_time(final_end_position))
             QTimer.singleShot(100, lambda: self.video_editor._jump_to_global_time(final_end_position))
             QTimer.singleShot(250, lambda: self.video_editor._jump_to_global_time(final_end_position))
@@ -4328,8 +4331,8 @@ class MainWindow(QMainWindow):
    
     
     def on_play_ended(self):
-        """Wird aufgerufen, wenn das Video natürlich endet"""
-        # Stelle sicher, dass alle Zustände korrekt zurückgesetzt werden
+        """Called when the video reaches its natural end."""
+        # Ensure all states are reset correctly
         self.video_editor.is_playing = False
         try:
             self.video_editor._player.pause = True
@@ -4371,8 +4374,8 @@ class MainWindow(QMainWindow):
 
     def on_time_hms_set_clicked(self, hh: int, mm: int, ss: int, ms=0):
         """
-        Empfängt das Signal vom VideoControlWidget (SetTime-Button).
-        Rechnet hh:mm:ss => globale Sekunde => springt dorthin.
+        Receives the signal from the VideoControlWidget ("SetTime" button).
+        Converts hh:mm:ss to a global second value and seeks the video there.
         """
         # 1) h/m/s in float-Sekunden
         total_s = hh * 3600 + mm * 60 + ss + (ms / 1000.0)
@@ -4835,11 +4838,11 @@ class MainWindow(QMainWindow):
             
     def on_sync_clicked(self):
         """
-        Sync-Button aus VideoControlWidget: 
-        Wir nutzen die *final* Time (falls Cuts) und 
-        zeigen in der GPX-Liste + Map (blau) den passenden Punkt.
+        Sync button from the VideoControlWidget.
+        Uses the *final* time (respecting cuts) and highlights
+        the matching point in the GPX list and map (blue).
         """
-        # 1) Aktuelle Videoposition => global
+        # 1) Current video position => global time
         """
         local_time_s = self.video_editor.get_current_position_s()
         if local_time_s < 0:
@@ -4883,9 +4886,9 @@ class MainWindow(QMainWindow):
         3) global_s = get_global_time_for_final(final_s)
         4) => on_time_hms_set_clicked => Video
         """
-        print("[DEBUG] on_map_sync_any() aufgerufen (Map-Sync)")
+        print("[DEBUG] on_map_sync_any() called (map sync)")
 
-        # 1) Welcher Punkt in der Karte? (blau_idx)
+        # 1) Which point in the map? (blue_idx)
         idx_map = self.map_widget._blue_idx
         if idx_map is None or idx_map < 0:
             # fallback => nimm Zeile aus gpx_list
@@ -4935,7 +4938,7 @@ class MainWindow(QMainWindow):
 
     def check_and_handle_video_end(self):
         """
-        Robuste Endcut-Erkennung die direkt mit den Cut-Intervallen arbeitet
+        Robust endcut detection that works directly with the cut intervals.
         """
         if not self.video_editor.is_playing:
             return
@@ -4945,34 +4948,34 @@ class MainWindow(QMainWindow):
             total_duration = self.real_total_duration
             cut_intervals = getattr(self.cut_manager, "_cut_intervals", [])
             
-            # Berechne die tatsächliche Endposition
+            # Compute the effective end position
             final_end_position = total_duration
             if cut_intervals:
                 keep_intervals = self._compute_keep_intervals(cut_intervals, total_duration)
                 if keep_intervals:
                     final_end_position = keep_intervals[-1][1]
 
-            # Prüfe ob wir am Ende sind (mit verschiedenen Toleranzen)
+            # Check whether we are at the end (with various tolerances)
             time_to_end = final_end_position - current_global_s
             
-            # Debug-Ausgabe bei Bedarf aktivieren:
+            # Enable debug output here if needed:
             # if time_to_end < 1.0:
             #     print(f"[ENDOFTIME] current={current_global_s:.3f}, final_end={final_end_position:.3f}, time_to_end={time_to_end:.3f}")
 
-            # Wenn wir sehr nah am Ende sind (50ms Toleranz)
+            # If we are very close to the end (50 ms tolerance)
             if time_to_end <= 0.05:
-                print(f"[ENDOFTIME] Ende erreicht: {current_global_s:.3f} von {final_end_position:.3f}")
+                print(f"[ENDOFTIME] End reached: {current_global_s:.3f} of {final_end_position:.3f}")
                 
                 # Sofort Video stoppen
                 self._handle_video_end_state()
                 
-                # Prüfe ob ein Endcut vorhanden ist
+                # Check whether an endcut exists
                 has_endcut = abs(final_end_position - total_duration) > 0.1
                 
                 if has_endcut:
-                    print(f"[ENDOFTIME] Endcut erkannt: {final_end_position:.3f} (Gesamt: {total_duration:.3f})")
+                    print(f"[ENDOFTIME] Endcut detected: {final_end_position:.3f} (total: {total_duration:.3f})")
                     
-                    # Zeige Popup wenn aktiviert
+                    # Show popup if enabled
                     if self.action_show_endcut_warning.isChecked():
                         self._show_endcut_popup(final_end_position)
                     
@@ -4982,14 +4985,14 @@ class MainWindow(QMainWindow):
                     QTimer.singleShot(250, lambda: self.video_editor._jump_to_global_time(final_end_position))
                     
                 else:
-                    # Kein Endcut - einfach am Ende bleiben
+                    # No endcut – simply stay at the end
                     QTimer.singleShot(10, lambda: self.video_editor._jump_to_global_time(final_end_position))
 
         except Exception as e:
-            print(f"[ERROR] Fehler in check_and_handle_video_end: {e}")
+            print(f"[ERROR] Error in check_and_handle_video_end: {e}")
 
     def _show_endcut_popup(self, end_position):
-        """Zeigt das Endcut-Popup mit spezifischen Informationen"""
+        """Show the endcut popup with detailed information."""
         try:
             total_duration = self.real_total_duration
             cut_duration = total_duration - end_position
@@ -5008,10 +5011,10 @@ class MainWindow(QMainWindow):
             msg.exec()
             
         except Exception as e:
-            print(f"[ERROR] Fehler beim Anzeigen des Endcut-Popups: {e}")
+            print(f"[ERROR] Error while showing endcut popup: {e}")
 
     def _compute_keep_intervals(self, cut_intervals, total_duration):
-        """Berechnet die zu behaltenden Intervalle basierend auf Schnitten"""
+        """Compute the intervals to keep based on the cut intervals."""
         if not cut_intervals:
             return [(0.0, total_duration)]
 
@@ -5042,9 +5045,9 @@ class MainWindow(QMainWindow):
     
     
     def _handle_video_end_state(self, mark_as_end: bool = True):
-        """Setzt alle Player-Zustände korrekt für Video-Ende.
-        mark_as_end=False nutzen, wenn das Ende nur "angesteuert" wurde (z. B. Goto End),
-        damit nach Step-Back/Play nicht an den Anfang gesprungen wird.
+        """Set all player states correctly for the video end.
+        Use mark_as_end=False when the end was only navigated to (e.g. Goto End),
+        so that a subsequent step-back/play does not jump back to the beginning.
         """
         try:
             # Sofortiger Stop/Pause
@@ -5053,24 +5056,24 @@ class MainWindow(QMainWindow):
                 if hasattr(self.video_editor, '_player') and self.video_editor._player:
                     self.video_editor._player.pause = True
             except Exception as e:
-                print(f"[WARN] Konnte Player nicht pausieren: {e}")
+                print(f"[WARN] Could not pause player: {e}")
 
-            # UI aktualisieren
+            # Update UI
             self.video_control.update_play_pause_icon(False)
             self.gpx_widget.set_video_playing(False)
             self.map_widget.set_video_playing(False)
 
-            # Gelben Marker entfernen
+            # Clear yellow play marker, if any
             lw = self.gpx_widget.gpx_list
             if hasattr(lw, '_last_video_row') and lw._last_video_row is not None:
                 lw._mark_row_bg_except_markcol(lw._last_video_row, Qt.white)
                 lw._last_video_row = None
 
-            # Nur beim echten Abspiel-Ende auf "am Ende" setzen
+            # Only mark as "at end" for real playback end
             self._video_at_end = bool(mark_as_end)
 
         except Exception as e:
-            print(f"[ERROR] Fehler in _handle_video_end_state: {e}")    
+            print(f"[ERROR] Error in _handle_video_end_state: {e}")    
                 
     
     def _show_endcut_popup(self, end_position: float):
@@ -5131,7 +5134,7 @@ class MainWindow(QMainWindow):
         return popup
     
     def _fade_popout_out_step(self, popup, timer):
-        """Ein Schritt der Fade-Out Animation"""
+        """Single step of the fade-out animation."""
         current_opacity = popup.windowOpacity()
         if current_opacity > 0.1:
             popup.setWindowOpacity(current_opacity - 0.1)
@@ -5141,11 +5144,12 @@ class MainWindow(QMainWindow):
     
     def _save_gpx_to_file(self, gpx_points, out_file: str):
         """
-        Schreibt gpx_points als valides GPX 1.1 in die Datei `out_file`.
+        Write `gpx_points` as a valid GPX 1.1 file to `out_file`.
+
         gpx_points: list of dicts with lat, lon, ele, time, rel_s, ...
-    
-        Zeitformat => "YYYY-MM-DDTHH:MM:SS.xxxZ"
-        Beispiel: "2024-07-20T06:50:42.000Z"
+
+        Time format: "YYYY-MM-DDTHH:MM:SS.xxxZ"
+        Example:     "2024-07-20T06:50:42.000Z"
         """
        
 
@@ -5161,10 +5165,7 @@ class MainWindow(QMainWindow):
 
         # Bsp: 2024-07-20T06:50:42.000Z
         def _format_dt(dt):
-            # dt.strftime("%Y-%m-%dT%H:%M:%S.%fZ") => hat 6 Mikrosekunden
-            # Wir kürzen auf 3 Stellen => .%f => .xxx
             s = dt.strftime("%Y-%m-%dT%H:%M:%S.%f")  # z.B. 2024-07-20T06:50:42.123456
-            # => wir wollen nur die ersten 3 Nachkommastellen
             return s[:-3] + "Z"  # => 2024-07-20T06:50:42.123Z
 
         start_str = _format_dt(start_time)
@@ -5497,7 +5498,7 @@ class MainWindow(QMainWindow):
     def add_or_update_point_on_map(self, stable_id: str, lat: float, lon: float, 
                                 color: str="#000000", size: int=4):
         """
-        Ruft in map_page.html => addOrUpdatePoint(...) auf.
+        Call addOrUpdatePoint(...) in map_page.html.
         """
         js_code = (f"addOrUpdatePoint('{stable_id}', {lat}, {lon}, "
                 f"'{color}', {size});")
@@ -5505,7 +5506,7 @@ class MainWindow(QMainWindow):
 
     def remove_point_on_map(self, stable_id: str):
         """
-        Ruft in map_page.html => removePoint(...) auf.
+        Call removePoint(...) in map_page.html.
         """
         
 
@@ -5515,9 +5516,9 @@ class MainWindow(QMainWindow):
     
     def _on_new_project_triggered(self):
         """
-        Vollständiger Reset für 'New Project'.
-        Setzt Video, GPX, Timeline, Overlays, Marker, Slots, Sync/Prompts,
-        Edit-Mode, Zeitmodus (global) und UI-Zustände zurück.
+        Full reset for 'New Project'.
+        Resets video, GPX, timeline, overlays, markers, slots, sync/prompts,
+        edit mode, time mode (global) and all relevant UI state.
         """
         from PySide6.QtWidgets import QMessageBox
 
@@ -5545,7 +5546,7 @@ class MainWindow(QMainWindow):
         except Exception as e:
             print(f"[WARN] NewProject: mpv cleanup: {e}")
 
-        # Zeitmodus/Callback zurück auf "global"/None
+        # Reset time mode/callback back to "global"/None
         try:
             self._time_mode = "global"
             self.video_editor.set_time_mode("global")      # VideoEditorWidget API
@@ -5737,14 +5738,14 @@ class MainWindow(QMainWindow):
         c = 2.0 * atan2(sqrt(a), sqrt(1.0 - a))
         return R * c
 
-    # ⬇️⬇️⬇️ NEU: Rechtsklick-Logik – im anderen Slot nächsten Punkt finden und springen
+    # ⬇️⬇️⬇️ NEW: Right-click logic – find nearest point in the other slot and jump there
     def jump_to_nearest_point_in_other_slot(self, max_distance_m: float = 40.0):
         """
-        Wird vom GPXControlWidget bei Rechtsklick auf den Slot-Button aufgerufen.
-        - Nimmt den selektierten Punkt (Lat/Lon) im AKTIVEN Slot,
-        - sucht im ANDEREN Slot den nächstgelegenen Punkt,
-        - wenn <= max_distance_m: Slot wechseln + dort selektieren & zoomen,
-        - sonst Hinweis und NICHT umschalten.
+        Called by the GPXControlWidget on right-click on the Slot button.
+        - Take the selected point (lat/lon) in the ACTIVE slot,
+        - search the CLOSEST point in the OTHER slot,
+        - if distance <= max_distance_m: switch slot, select and zoom there,
+        - otherwise show an info message and DO NOT switch.
         """
         # 0) Beide Slots müssen Daten haben
         if not self._gpx_slots[1]["gpx_data"] or not self._gpx_slots[2]["gpx_data"]:
@@ -5813,12 +5814,12 @@ class MainWindow(QMainWindow):
     def on_markB_clicked_gpx(self):
         
         """
-        Wird aufgerufen, wenn im GPXControlWidget der Button 'MarkB' geklickt wird.
-        => current_row ohne +1
+        Called when the 'MarkB' button is clicked in the GPXControlWidget.
+        Uses the current_row index as-is (no +1 offset).
         """
         current_row = self.gpx_widget.gpx_list.table.currentRow()
         if current_row < 0:
-            print("[DEBUG] Keine Zeile ausgewählt in gpx_list!")
+            print("[DEBUG] No row selected in gpx_list!")
             return
 
         # Ohne +1
@@ -5829,9 +5830,9 @@ class MainWindow(QMainWindow):
     def on_deselect_clicked(self):
         
         """
-        Wird aufgerufen, wenn der Deselect-Button gedrückt wird 
-        (VideoControlWidget oder GPXControlWidget).
-        => Wir entfernen alle roten Markierungen in der GPX-Liste.
+        Called when the Deselect button is pressed 
+        (either in the VideoControlWidget or GPXControlWidget).
+        => Clears all red marks in the GPX list.
         """
         self.gpx_widget.gpx_list.clear_marked_range()
         self.map_widget.clear_marked_range()        
@@ -5977,11 +5978,11 @@ class MainWindow(QMainWindow):
     
     
     def _on_request_reattach_map(self):
-        """Vom Dialog-Signal aufgerufen."""
+        """Called from the floating-dialog signal to reattach the map widget."""
         self._reattach_map_widget()
     
     
-    # (Optional) Falls du + / – für Zoom willst:
+    # (Optional) Zoom helpers for map (+ / -):
     def _on_map_plus(self):
         # Angenommen, du hast in map_page.html JS-Funktionen "mapZoomIn()"
         js_code = "mapZoomIn();"
@@ -6100,8 +6101,8 @@ class MainWindow(QMainWindow):
 
     def save_project(self):
         """
-        Speichert das aktuelle Projekt in die bestehende Projektdatei.
-        Nur sinnvoll, wenn bereits ein Projektpfad existiert.
+        Save the current project to the existing project file.
+        Only meaningful if a project path already exists.
         """
         if not getattr(self, "_current_project_path", None):
             # Fallback: wie "Save As..." verhalten
@@ -6113,8 +6114,8 @@ class MainWindow(QMainWindow):
 
     def save_project_as(self):
         """
-        Speichert das aktuelle Projekt unter einem neuen Pfad
-        (klassisches 'Save As').
+        Save the current project under a new path
+        (classic 'Save As').
         """
         filename, _ = QFileDialog.getSaveFileName(
             self,
@@ -6139,8 +6140,8 @@ class MainWindow(QMainWindow):
 
     def _collect_project_data(self) -> dict:
         """
-        Stellt die aktuellen Projekt-Daten als Dictionary zusammen.
-        Wird von save_project und Autosave verwendet.
+        Assemble the current project data as a dictionary.
+        Used by save_project and autosave.
         """
         project_data = {
             "playlist": self.playlist,
@@ -6163,9 +6164,9 @@ class MainWindow(QMainWindow):
 
     def _write_project_to_path(self, path: str, show_message: bool = False) -> bool:
         """
-        Schreibt das aktuelle Projekt nach 'path'.
-        show_message steuert, ob ein QMessageBox-Hinweis angezeigt wird.
-        Gibt True bei Erfolg, False bei Fehler zurück.
+        Write the current project to `path`.
+        show_message controls whether a QMessageBox is shown on success/error.
+        Returns True on success, False on failure.
         """
         project_data = self._collect_project_data()
         try:
@@ -6184,8 +6185,8 @@ class MainWindow(QMainWindow):
 
     def _on_autosave_timeout(self):
         """
-        Wird periodisch vom Autosave-Timer aufgerufen.
-        Speichert das Projekt automatisch, falls ein Pfad existiert und Änderungen vorliegen.
+        Called periodically by the autosave timer.
+        Automatically saves the project when a path exists and there are unsaved changes.
         """
         if not self._current_project_path:
             return
@@ -6195,13 +6196,13 @@ class MainWindow(QMainWindow):
         autosave_path = self._current_project_path + ".autosave"
         print(f"[DEBUG] Autosave to {autosave_path}")
         if self._write_project_to_path(autosave_path, show_message=False):
-            # Autosave belässt das Hauptprojekt als "dirty", dient nur als Sicherheitskopie
+            # Autosave keeps the main project marked as "dirty", it is only a safety backup
             pass
 
         
     
     def load_project(self):
-        """Lädt eine Projektdatei - zeigt beide Projektformate gleichzeitig an"""
+        """Load a project file – offers both project formats in one dialog."""
         file_path, selected_filter = QFileDialog.getOpenFileName(
             self,
             "Load Project File",
@@ -6241,8 +6242,7 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event):
         """
-        Fragt den Benutzer beim Schließen des Fensters,
-        ob ein geändertes Projekt gespeichert werden soll.
+        Ask the user on window close whether to save a modified project.
         """
         try:
             if getattr(self, "_project_dirty", False):
@@ -6444,7 +6444,7 @@ class MainWindow(QMainWindow):
         
     def _calculate_cut_total_duration(self):
         """
-        Berechnet die Gesamtdauer nach Anwendung aller Cuts.
+        Calculate the total duration after applying all cuts.
         """
         if not self.video_durations:
             return 0.0
@@ -6656,16 +6656,16 @@ class MainWindow(QMainWindow):
         ret = self._increment_counter_on_server("gpx")
         if ret is not None:
             vcount, gcount = ret
-            print(f"[INFO] Server-Counter nun: Video={vcount}, GPX={gcount}")
+            print(f"[INFO] Server counters now: Video={vcount}, GPX={gcount}")
         else:
-            print("[WARN] Konnte GPX-Zähler nicht hochsetzen.")
+            print("[WARN] Could not increment GPX counter on server.")
 
         QMessageBox.information(self, "Done", f"GPX saved as '{out_path}'.")
 
                 
     def _on_show_temp_dir(self):
         """
-        Zeigt das aktuelle Temp-Verzeichnis an.
+        Show the currently configured temp directory.
         """
         from PySide6.QtCore import QSettings
         import config
@@ -6681,7 +6681,7 @@ class MainWindow(QMainWindow):
 
     def _on_set_temp_dir(self):
         """
-        Temp-Verzeichnis neu wählen.
+        Choose a new temp directory.
         """
         from PySide6.QtCore import QSettings
     
@@ -6703,7 +6703,7 @@ class MainWindow(QMainWindow):
 
     def _on_clear_temp_dir(self):
         """
-        Entfernt das Temp-Verzeichnis aus QSettings.
+        Remove the temp directory setting from QSettings.
         """
         from PySide6.QtCore import QSettings
     
@@ -6806,8 +6806,8 @@ class MainWindow(QMainWindow):
 
     def _update_set_gpx2video_enabled(self):
         """
-        Aktiviert/Deaktiviert die 'SetGPX2VideoTime'-Funktion je nach Modus.
-        Nur aktiv, wenn EditMode != "off" und AutoCutVideo+GPX deaktiviert ist.
+        Enable/disable the 'SetGPX2VideoTime' feature depending on the current mode.
+        Only active when edit mode != "off" and AutoCutVideo+GPX is disabled.
         """
         if self.gpx_control and hasattr(self.gpx_control, "_action_set_gpx2video"):
             is_edit_mode = self._edit_mode != "off"
@@ -6821,7 +6821,7 @@ class MainWindow(QMainWindow):
     # Neue kombinierte Methode GPX/FIT:
 
     def load_track_file(self):
-        """Importiert eine GPX-, FIT- oder Geoinfer-JSON-Datei."""
+        """Import a GPX, FIT or Geoinfer JSON file."""
         # Gemeinsames Dateiauswahlfenster für alle unterstützten Formate
         file_path, selected_filter = QFileDialog.getOpenFileName(
             self,
@@ -7389,7 +7389,7 @@ class MainWindow(QMainWindow):
     
     
     def process_open_fit(self, file_path, mode="new"):
-        """Verarbeitet die FIT-Datei und konvertiert sie zu GPX-Daten"""
+        """Process a FIT file and convert it into GPX data."""
         self.map_widget.view.page().runJavaScript("showLoading('Loading FIT...');")
         QApplication.processEvents()
     

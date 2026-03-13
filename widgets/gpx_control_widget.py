@@ -420,7 +420,7 @@ class GPXControlWidget(QWidget):
         start_ele = gpx_data[b_idx].get("ele", 0.0)
         old_end_ele = gpx_data[e_idx].get("ele", 0.0)  # Original-Endhöhe vor Änderung
 
-        # 2) Dialog: User wählt neue End-Höhe
+        # 2) Dialog: user chooses new end elevation
         dlg = QDialog(self)
         dlg.setWindowTitle(f"Set Height B..E (Wave-Preserve) – Range {b_idx}..{e_idx}")
         vbox = QVBoxLayout(dlg)
@@ -434,7 +434,7 @@ class GPXControlWidget(QWidget):
         )
         vbox.addWidget(lbl_info)
 
-        # Start-Höhe (read-only)
+        # Start elevation (read-only)
         row_start = QHBoxLayout()
         lbl_start = QLabel(f"Start Height ({b_idx}):")
         edit_start = QLineEdit(f"{start_ele:.2f}")
@@ -443,7 +443,7 @@ class GPXControlWidget(QWidget):
         row_start.addWidget(edit_start)
         vbox.addLayout(row_start)
 
-        # End-Höhe (editierbar)
+        # End elevation (editable)
         row_end = QHBoxLayout()
         lbl_end = QLabel(f"End Height ({e_idx}):")
         spin_end = QDoubleSpinBox()
@@ -496,7 +496,7 @@ class GPXControlWidget(QWidget):
             self.register_gpx_undo_snapshot()
             
 
-            # (A) Gesamtstrecke 2D in [b_idx.. e_idx]
+            # (A) Total 2D distance in [b_idx..e_idx]
             total_2d = calc_total_2d_distance(b_idx, e_idx)
             if total_2d < 0.001:
                 QMessageBox.warning(
@@ -505,8 +505,8 @@ class GPXControlWidget(QWidget):
                 )
                 return
     
-            # (B) Alte "Basislinie" + waveOffsets bestimmen
-            #     Basislinie alt: L(i) = start_ele + frac*(old_end_ele - start_ele)
+            # (B) Determine old baseline + wave offsets
+            #     Old baseline: L(i) = start_ele + frac * (old_end_ele - start_ele)
             #     waveOffset_i = oldEle_i - L(i)
             wave_offsets = {}
             for i in range(b_idx, e_idx + 1):
@@ -516,8 +516,8 @@ class GPXControlWidget(QWidget):
                 actual_ele_i   = gpx_data[i]["ele"]
                 wave_offsets[i] = actual_ele_i - old_line_ele_i
 
-            # (C) Neue Basislinie (start_ele -> new_end_val) + Wave Offset
-            #     newEle_i = (start_ele + frac*(new_end_val - start_ele)) + waveOffset[i]
+            # (C) New baseline (start_ele -> new_end_val) + preserved wave offset
+            #     newEle_i = (start_ele + frac * (new_end_val - start_ele)) + waveOffset[i]
             for i in range(b_idx, e_idx + 1):
                 dist_i = calc_cumulative_dist(b_idx, i)
                 frac   = dist_i / total_2d
@@ -527,7 +527,7 @@ class GPXControlWidget(QWidget):
             # (D) Konstanter Offset für alle Punkte ab e_idx+1
             offset = gpx_data[e_idx]["ele"] - old_end_ele
 
-            # -- FIXED: Statt gpx_data[j]["ele"] + offset => old_data[j]["ele"] + offset 
+            # Apply constant offset to all points after e_idx
             for j in range(e_idx + 1, len(gpx_data)):
                 #old_ele_j = old_data[j]["ele"]  # der unveränderte Wert vor der Aktion
                 #gpx_data[j]["ele"] = old_ele_j + offset
@@ -1671,10 +1671,10 @@ class GPXControlWidget(QWidget):
     def on_smooth_clicked(self):
         mw = self._mainwindow
         """
-        Wird aufgerufen, wenn im GPXControlWidget der 'Smooth' Button gedrückt wird.
-        - Öffnet einen Dialog mit 2 Parametern: Box_Smoothing (default=10), Flatten_Value (default=2)
-        - Bei OK => ruft _apply_smoothing(...) auf, das die komplette GPX glättet
-        - Schreibt Undo-History, damit man zurück kann
+        Called when the 'Smooth' button in the GPXControlWidget is pressed.
+        - Opens a dialog with 2 parameters: Box_Smoothing (default=10), Flatten_Value (default=2)
+        - On OK => calls _apply_smoothing(...) which smooths the entire GPX
+        - Writes to the undo history so the user can revert
         """
         
         gpx_data = mw.gpx_widget.gpx_list._gpx_data
