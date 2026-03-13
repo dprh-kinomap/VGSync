@@ -585,16 +585,11 @@ class MainWindow(QMainWindow):
         self.update_recent_files_menu()
         file_menu.addSeparator()
 
-        load_track_action = QAction("Import GPX/FIT", self)
-        load_track_action.setStatusTip("Load a GPX or FIT track file")
+        # Single import entry for GPX/FIT/Geoinfer JSON
+        load_track_action = QAction("Import GPX/FIT/Geoinfer JSON...", self)
+        load_track_action.setStatusTip("Import GPX, FIT, or Geoinfer proposals JSON file")
         load_track_action.triggered.connect(self.load_track_file)
         file_menu.addAction(load_track_action)
-
-        # ---------- new: import propositions JSON ----------
-        import_prop_action = QAction("Import Proposals (JSON)", self)
-        import_prop_action.setStatusTip("Import JSON containing location proposals for video times")
-        import_prop_action.triggered.connect(self.import_proposals_json)
-        file_menu.addAction(import_prop_action)
 
         load_mp4_action = QAction("Import Video", self)
         load_mp4_action.setStatusTip("Load one or more Videos.")
@@ -6697,13 +6692,34 @@ class MainWindow(QMainWindow):
     # Neue kombinierte Methode GPX/FIT:
 
     def load_track_file(self):
-        """Lädt entweder eine GPX oder FIT Datei - automatisch erkannt an der Endung"""
-        # Dialog für new/append (gleiche Logik wie vorher)
+        """Importiert eine GPX-, FIT- oder Geoinfer-JSON-Datei."""
+        # Gemeinsames Dateiauswahlfenster für alle unterstützten Formate
+        file_path, selected_filter = QFileDialog.getOpenFileName(
+            self,
+            "Select Track or Proposals File",
+            "",
+            "Track/Proposal Files (*.gpx *.fit *.json);;Track Files (*.gpx *.fit);;JSON Files (*.json);;All Files (*.*)"
+        )
+
+        if not file_path:
+            return
+
+        # Dateiendung bestimmen
+        file_ext = file_path.lower()
+
+        # JSON → direkt an den Geoinfer/Proposals-Importer delegieren
+        if file_ext.endswith(".json"):
+            self.import_proposals_json(file_path)
+            return
+
+        # GPX/FIT → wie bisher: ggf. nach New/Append fragen
         if self._gpx_data:
             msg_box = QMessageBox(self)
             msg_box.setWindowTitle("Load Track File")
-            msg_box.setText("A track is already loaded.\n"
-                            "Do you want to start a new track or append the new file?")
+            msg_box.setText(
+                "A track is already loaded.\n"
+                "Do you want to start a new track or append the new file?"
+            )
             new_btn = msg_box.addButton("New", QMessageBox.AcceptRole)
             append_btn = msg_box.addButton("Append", QMessageBox.YesRole)
             cancel_btn = msg_box.addButton("Cancel", QMessageBox.RejectRole)
@@ -6720,31 +6736,17 @@ class MainWindow(QMainWindow):
         else:
             mode = "new"
 
-        # Kombiniertes Dateiauswahlfenster für beide Formate (restored from earlier)
-        file_path, selected_filter = QFileDialog.getOpenFileName(
-            self,
-            "Select Track File (GPX or FIT)",
-            "",
-            "Track Files (*.gpx *.fit);;GPX Files (*.gpx);;FIT Files (*.fit);;All Files (*.*)"
-        )
-    
-        if not file_path:
-            return
-    
-        # Automatische Erkennung anhand der Dateiendung
-        file_ext = file_path.lower()
-    
         try:
-            if file_ext.endswith('.gpx'):
+            if file_ext.endswith(".gpx"):
                 self.process_open_gpx(file_path, mode)
-            elif file_ext.endswith('.fit'):
+            elif file_ext.endswith(".fit"):
                 self.process_open_fit(file_path, mode)
             else:
                 QMessageBox.warning(
-                    self, 
-                    "Unsupported Format", 
+                    self,
+                    "Unsupported Format",
                     f"File format not supported: {file_path}\n"
-                    "Please select a .gpx or .fit file."
+                    "Please select a .gpx, .fit or Geoinfer .json file."
                 )
                 return
             
@@ -6760,20 +6762,24 @@ class MainWindow(QMainWindow):
     # ---------------------------------------------------------------------
     # JSON import of coordinate proposals
     # ---------------------------------------------------------------------
-    def import_proposals_json(self):
-        """Opens file dialog, loads the JSON array produced by the proposal tool,
-        converts each entry into a GPX point and appends them to the current
-        track (or starts a new track if none exist)."""
+    def import_proposals_json(self, file_path=None):
+        """Loads the JSON array produced by the proposal tool, converts each entry
+        into a GPX point and appends them to the current track (or starts a new
+        track if none exist).
+
+        If ``file_path`` is None, a file dialog is shown to select the JSON file.
+        """
         from PySide6.QtWidgets import QFileDialog
 
-        file_path, _ = QFileDialog.getOpenFileName(
-            self,
-            "Select proposals JSON file",
-            "",
-            "JSON files (*.json);;All Files (*.*)"
-        )
-        if not file_path:
-            return
+        if file_path is None:
+            file_path, _ = QFileDialog.getOpenFileName(
+                self,
+                "Select proposals JSON file",
+                "",
+                "JSON files (*.json);;All Files (*.*)"
+            )
+            if not file_path:
+                return
 
         try:
             with open(file_path, "r", encoding="utf-8") as f:
