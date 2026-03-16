@@ -213,7 +213,7 @@ class GPXControlWidget(QWidget):
         
         
         
-        action_get_ele_mapbox = self.more_menu.addAction("GetElevation from Mapbox")
+        action_get_ele_mapbox = self.more_menu.addAction("GetElevation from OpenTopoData")
         action_get_ele_mapbox.triggered.connect(self._on_get_ele_mapbox)
 
         
@@ -677,91 +677,76 @@ class GPXControlWidget(QWidget):
         )
     
     
-    def update_elevation_from_mapbox(self, latlon_list):
+    def update_elevation_from_opentopo(self, latlon_list):
         """
-        Holt Elevation für latlon_list via Mapbox Terrain-RGB Tiles.
+        Fetch elevation for the given list of points via OpenTopoData.
         latlon_list: [(gpx_idx, lat, lon), ...]
-        Gibt zurück: (successful_points, tile_count)
+        Returns: (successful_points, request_count)
         """
-        import math
-        from PIL import Image
-        import io
 
         mw = self._mainwindow
         if not mw:
             return (0, 0)
-        
-        token = mw._mapbox_key.strip()
-        if not token:
-            print("[INFO] No Mapbox key – skipping elevation update")
-            #QMessageBox.warning(self, "No Mapbox Key", "No Mapbox API key found. Please set it in Config > Map Keys.")
-            return (0, 0)
 
         gpx_data = mw.gpx_widget.gpx_list._gpx_data
-        ZOOM = 14
 
-        # Hilfsfunktionen
-        def latlon_to_tile(lat, lon, zoom):
-            n = 2 ** zoom
-            x_tile = int((lon + 180.0) / 360.0 * n)
-            y_tile = int((1.0 - math.log(math.tan(math.radians(lat)) + 1 / math.cos(math.radians(lat))) / math.pi) / 2.0 * n)
-            return x_tile, y_tile
+        # OpenTopoData configuration
+        DATASET = "eudem25m"  # can be adjusted if needed
+        BASE_URL = f"https://api.opentopodata.org/v1/{DATASET}"
+        BATCH_SIZE = 80  # keep batches small to avoid very long URLs and rate limits
 
-        def latlon_to_pixel(lat, lon, zoom, tile_size):
-            n = 2 ** zoom * tile_size
-            x = (lon + 180.0) / 360.0 * n
-            y = (1.0 - math.log(math.tan(math.radians(lat)) + 1 / math.cos(math.radians(lat))) / math.pi) / 2.0 * n
-            return int(x), int(y)
-
-        # Schritt 1: alle benötigten Tiles ermitteln
-        needed_tiles = set()
-        for _, lat, lon in latlon_list:
-            xt, yt = latlon_to_tile(lat, lon, ZOOM)
-            needed_tiles.add((xt, yt))
-
-        # Schritt 2: Tiles herunterladen
-        tile_images = {}
-        tile_size = 256  # Standard
-        tile_count = 0
-
-        for (xtile, ytile) in needed_tiles:
-            url = f"https://api.mapbox.com/v4/mapbox.terrain-rgb/{ZOOM}/{xtile}/{ytile}.pngraw?access_token={token}"
-            try:
-                with urllib.request.urlopen(url) as response:
-                    img_bytes = response.read()
-                    img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
-                    tile_images[(xtile, ytile)] = img
-                    tile_size = img.size[0]  # z. B. 256
-                    tile_count += 1
-            except Exception as e:
-                QMessageBox.warning(self, "Tile Load Error",
-                    f"Could not load tile {xtile},{ytile}:\n{e}")
-                return (0, 0)
-    
-        if tile_count == 0:
-            return (0, 0)
-
-        # Schritt 3: Höhenwerte extrahieren
         successful_points = 0
-    
-        for gpx_i, lat, lon in latlon_list:
-            x_pix, y_pix = latlon_to_pixel(lat, lon, ZOOM, tile_size)
-            xtile, ytile = x_pix // tile_size, y_pix // tile_size
-            x_in_tile, y_in_tile = x_pix % tile_size, y_pix % tile_size
+        request_count = 0
 
-            img = tile_images.get((xtile, ytile))
-            if img is None:
+        # Split into batches to respect API limits (and keep URL length modest)
+        for i in range(0, len(latlon_list), BATCH_SIZE):
+            batch = latlon_list[i:i + BATCH_SIZE]
+            if not batch:
                 continue
 
-            if 0 <= x_in_tile < img.width and 0 <= y_in_tile < img.height:
-                r, g, b = img.getpixel((x_in_tile, y_in_tile))
-                elevation = -10000 + ((r * 256 * 256 + g * 256 + b) * 0.1)
-                gpx_data[gpx_i]["ele"] = elevation
-                successful_points += 1
-            else:
-                print(f"[WARN] Out-of-bounds pixel: {x_in_tile},{y_in_tile} in tile {xtile},{ytile}")
+            locations_param = "|".join(f"{lat},{lon}" for _, lat, lon in batch)
+            url = f"{BASE_URL}?locations={locations_param}"
 
-        return (successful_points, tile_count)
+            try:
+                with urllib.request.urlopen(url, timeout=10) as response:
+                    data = json.loads(response.read().decode("utf-8"))
+                request_count += 1
+            except urllib.error.HTTPError as e:
+                if e.code == 429:
+                    QMessageBox.warning(
+                        self,
+                        "OpenTopoData Rate Limit",
+                        "OpenTopoData returned HTTP 429 (Too Many Requests).\n"
+                        "Please wait a bit and try again, or select a smaller GPX range."
+                    )
+                    return (successful_points, request_count)
+                QMessageBox.warning(self, "OpenTopoData Error",
+                                    f"HTTP error while fetching elevation data:\n{e}")
+                return (successful_points, request_count)
+            except urllib.error.URLError as e:
+                QMessageBox.warning(self, "OpenTopoData Error",
+                                    f"Could not reach OpenTopoData service:\n{e}")
+                return (successful_points, request_count)
+            except Exception as e:
+                QMessageBox.warning(self, "OpenTopoData Error",
+                                    f"Unexpected error while fetching elevation data:\n{e}")
+                return (successful_points, request_count)
+
+            status = data.get("status")
+            results = data.get("results", [])
+            if status != "OK" or not results:
+                # Soft failure for this batch – continue with remaining batches
+                continue
+
+            # Map results back to GPX points
+            for (gpx_i, _, _), res in zip(batch, results):
+                elev = res.get("elevation")
+                if elev is None:
+                    continue
+                gpx_data[gpx_i]["ele"] = elev
+                successful_points += 1
+
+        return (successful_points, request_count)
 
     ###
     def _on_get_ele_mapbox(self):
@@ -789,7 +774,7 @@ class GPXControlWidget(QWidget):
 
             reply = QMessageBox.question(
                 self,
-                "Get Elevation from Mapbox",
+                "Get Elevation from OpenTopoData",
                 f"This will fetch elevation data for point {b_idx}.\nDo you want to proceed?",
                 QMessageBox.Yes | QMessageBox.No
             )
@@ -813,8 +798,8 @@ class GPXControlWidget(QWidget):
 
             reply = QMessageBox.question(
                 self,
-                "Get Elevation from Mapbox",
-                f"This will fetch precise elevation data from Mapbox for the selected GPX range {b_idx} to {e_idx}.\nDo you want to proceed?",
+                "Get Elevation from OpenTopoData",
+                f"This will fetch elevation data from OpenTopoData for the selected GPX range {b_idx} to {e_idx}.\nDo you want to proceed?",
                 QMessageBox.Yes | QMessageBox.No
             )
             if reply != QMessageBox.Yes:
@@ -823,7 +808,7 @@ class GPXControlWidget(QWidget):
             latlon_list = [(i, gpx_data[i]["lat"], gpx_data[i]["lon"]) for i in range(b_idx, e_idx + 1)]
     
         # Elevation abrufen
-        successful_points, tile_count = self.update_elevation_from_mapbox(latlon_list)
+        successful_points, tile_count = self.update_elevation_from_opentopo(latlon_list)
 
         #if tile_count == 0:
         if tile_count == 0 and successful_points == 0:
@@ -856,8 +841,9 @@ class GPXControlWidget(QWidget):
                 
     
         QMessageBox.information(
-            self, "Done",
-            f"Elevation updated for {successful_points} point(s) via Mapbox Terrain-RGB."
+            self,
+            "Elevation updated",
+            f"Elevation successfully updated for {successful_points} point(s) via OpenTopoData."
         )
 
     
@@ -3469,7 +3455,7 @@ class GPXControlWidget(QWidget):
             mapbox_ele_update_list.append((b_idx + i,p["lat"], p["lon"]))
         # 7) recalc
         mw.gpx_widget.set_gpx_data(gpx_data)
-        self.update_elevation_from_mapbox(mapbox_ele_update_list)
+        self.update_elevation_from_opentopo(mapbox_ele_update_list)
 
         recalc_gpx_data(gpx_data)
         mw.gpx_widget.set_gpx_data(gpx_data)

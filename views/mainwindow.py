@@ -2495,7 +2495,7 @@ class MainWindow(QMainWindow):
                                 
         
         self.gpx_widget.set_gpx_data(gpx_data) #need to update gpx_widget data before update elevation
-        self.gpx_control.update_elevation_from_mapbox([(insert_pos, lat, lon)])
+        self.gpx_control.update_elevation_from_opentopo([(insert_pos, lat, lon)])
 
         #  => recalc
         recalc_gpx_data(gpx_data)
