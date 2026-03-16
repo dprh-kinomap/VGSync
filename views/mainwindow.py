@@ -6922,6 +6922,13 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Error", f"Could not load JSON: {e}")
             return
 
+        # Add successfully opened Geoinfer JSON to recent files (when opened directly)
+        try:
+            self.save_recent_file(file_path)
+            self.update_recent_files_menu()
+        except Exception:
+            pass
+
         if not isinstance(data, list):
             QMessageBox.warning(self, "Import Proposals", "JSON does not contain an array.")
             return
@@ -7379,6 +7386,15 @@ class MainWindow(QMainWindow):
         from core.gpx_parser import recalc_gpx_data
         recalc_gpx_data(self._gpx_data)
         self._set_gpx_data(self._gpx_data)
+
+        # mark this as a "new" GPX-like load so the sync prompt logic can react
+        self._last_gpx_load_mode = "new"
+
+        # if there is already a video loaded, propose sync just like after loading GPX/FIT
+        try:
+            self.proposeVideoGpxSync()
+        except Exception:
+            pass
 
         QMessageBox.information(self, "Import Proposals", f"Imported {len(pts)} points.")
         return
