@@ -1143,7 +1143,13 @@ class MainWindow(QMainWindow):
         gpx_info_menu.addAction(action_avgspeed)
         action_avgspeed.triggered.connect(self.gpx_control.on_show_average_speed_info)
         action_avgspeed.setStatusTip("Show average speed for current GPX selection.")
-        
+
+        # Elevation edit mode on chart
+        self.action_edit_elevations_chart = QAction("Edit elevations on chart", self)
+        self.action_edit_elevations_chart.setCheckable(True)
+        self.action_edit_elevations_chart.setStatusTip("Enable direct elevation editing by dragging control points on the chart.")
+        gpx_info_menu.addAction(self.action_edit_elevations_chart)
+        self.action_edit_elevations_chart.toggled.connect(self.chart.set_elevation_edit_mode)
         if FIT_BUILD:
             export_fit = QAction("Export to Fit Immersion", self)
             gpx_info_menu.addAction(export_fit)
@@ -1188,7 +1194,8 @@ class MainWindow(QMainWindow):
         s = QSettings("KVRouite", "KVRouite")
         speed_cap = s.value("chart/speedCap", 70.0, type=float)
         self.chart.set_speed_cap(speed_cap)
-        
+        # Elevation edit on chart
+        self.chart.elevationPointEdited.connect(self._on_chart_elevation_point_edited)
         self.chart.raiseTrackRequested.connect(self._on_raise_track_above_sea)
         
         # GpxControl -> GpxList
@@ -4115,10 +4122,40 @@ class MainWindow(QMainWindow):
        
         self.chart.highlight_gpx_index(index)
 
+    def _on_chart_elevation_point_edited(self, index: int, new_ele: float):
+        """
+        Called when the user finishes dragging an elevation control point on the chart.
+        The ChartWidget has already applied the skeleton-style interpolation to
+        the underlying GPX data; here we just register undo, recompute derived
+        values and refresh all views.
+        """
+        if not self._gpx_data or index < 0 or index >= len(self._gpx_data):
+            return
+        try:
+            # Register undo before modifying data
+            self.register_gpx_undo_snapshot()
+        except Exception:
+            pass
 
-    
+        # The chart already modified self._gpx_data (control + neighbouring points)
+        # according to the drag; we only rely on the final elevation for logging/consistency.
 
-    
+        try:
+            from core.gpx_parser import recalc_gpx_data
+            recalc_gpx_data(self._gpx_data)
+        except Exception:
+            pass
+
+        # Push updated data into widgets/map/chart
+        self.gpx_widget.set_gpx_data(self._gpx_data)
+        if self.mini_chart_widget:
+            self.mini_chart_widget.set_gpx_data(self._gpx_data)
+        self._update_gpx_overview()
+        try:
+            route_geojson = self._build_route_geojson_from_gpx(self._gpx_data)
+            self.map_widget.loadRoute(route_geojson, do_fit=False)
+        except Exception:
+            pass
     def add_to_playlist(self, filepath):
         if filepath not in self.playlist:
             self.playlist.append(filepath)

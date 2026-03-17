@@ -31,6 +31,7 @@ ELE_EPS = 0.05
 class ChartWidget(QWidget):
     markerClicked = Signal(int)
     raiseTrackRequested = Signal(float)
+    elevationPointEdited = Signal(int, float)  # index, new_elevation
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -78,7 +79,15 @@ class ChartWidget(QWidget):
         
         self._usl_badge_rect = None   # clickable area of the badge
         self._usl_idx_cursor = -1     # cycling cursor for USL points
-        
+        # Elevation edit mode
+        self._elevation_edit_mode = False
+        self._ele_control_indices = []
+        self._dragging_ele_idx = None
+        self._drag_prev_anchor = None
+        self._drag_next_anchor = None
+        self._drag_seg_start = None
+        self._drag_seg_end = None
+        self._drag_orig_elevations = None
         
     def _prevideo_cut_idx(self) -> int:
         """
@@ -164,7 +173,76 @@ class ChartWidget(QWidget):
         self._usl_indices = [i for i, pt in enumerate(self._gpx_data) if pt.get("ele", 0.0) < 0.0]
         self._usl_idx_cursor = -1
         self._usl_badge_rect = None
+        self._rebuild_elevation_control_indices()
         self.update()
+
+    def _rebuild_elevation_control_indices(self):
+        """Rebuild the list of control indices used in elevation edit mode.
+
+        Anchors are placed at inflection-like positions of the elevation curve:
+        where the discrete slope changes sign (local minima/maxima), plus start/end.
+        """
+        self._ele_control_indices = []
+        count = len(self._gpx_data)
+        if count == 0:
+            return
+
+        # Always include first and last point
+        anchors = {0, count - 1}
+
+        if count >= 3:
+            # Collect inflection candidates based on sign changes of the slope
+            prev_delta = None
+            for i in range(1, count - 1):
+                ele_prev = float(self._gpx_data[i - 1].get("ele", 0.0))
+                ele_curr = float(self._gpx_data[i].get("ele", 0.0))
+                ele_next = float(self._gpx_data[i + 1].get("ele", 0.0))
+
+                d1 = ele_curr - ele_prev
+                d2 = ele_next - ele_curr
+
+                # ignore tiny noise
+                if abs(d1) < 1e-3:
+                    d1 = 0.0
+                if abs(d2) < 1e-3:
+                    d2 = 0.0
+
+                sign1 = 0 if d1 == 0.0 else (1 if d1 > 0 else -1)
+                sign2 = 0 if d2 == 0.0 else (1 if d2 > 0 else -1)
+
+                if sign1 != 0 and sign2 != 0 and sign1 != sign2:
+                    # Clear up/down turn -> local extremum
+                    anchors.add(i)
+                elif sign1 == 0 and sign2 != 0:
+                    # Flat then goes up/down: treat as start of new trend
+                    anchors.add(i)
+                elif sign1 != 0 and sign2 == 0:
+                    # Trend then flat: treat as end of trend
+                    anchors.add(i)
+
+        # Limit the number of anchors to keep UI responsive
+        max_controls = 80
+        sorted_anchors = sorted(anchors)
+        if len(sorted_anchors) > max_controls:
+            # Downsample while keeping first and last
+            step = max(1, len(sorted_anchors) // (max_controls - 1))
+            reduced = [sorted_anchors[0]]
+            for i in range(step, len(sorted_anchors) - 1, step):
+                reduced.append(sorted_anchors[i])
+            if sorted_anchors[-1] not in reduced:
+                reduced.append(sorted_anchors[-1])
+            sorted_anchors = sorted(set(reduced))
+
+        self._ele_control_indices = sorted_anchors
+
+    def set_elevation_edit_mode(self, enabled: bool):
+        """Enable or disable elevation edit mode (editing directly on the chart)."""
+        self._elevation_edit_mode = bool(enabled)
+        self._dragging_ele_idx = None
+        self.update()
+
+    def elevation_edit_mode(self) -> bool:
+        return self._elevation_edit_mode
 
     def highlight_gpx_index(self, index: int):
         """Springt im Chart zum GPX-Punkt `index`."""
@@ -238,12 +316,132 @@ class ChartWidget(QWidget):
             self._horizontal_offset = new_offset
             self.update()
             event.accept()
+        elif self._elevation_edit_mode and self._dragging_ele_idx is not None:
+            # Live update elevation: interpolate between fixed neighbour anchors.
+            # Previous and next anchors stay at their original elevation; only
+            # interior points (including the dragged one) move along a smooth line.
+            idx = self._dragging_ele_idx
+            if (
+                0 <= idx < len(self._gpx_data)
+                and self._drag_seg_start is not None
+                and self._drag_seg_end is not None
+                and self._drag_orig_elevations is not None
+            ):
+                count = len(self._gpx_data)
+                if count >= 2:
+                    w = self.width()
+                    h = self.height()
+
+                    # Use current global elevation range for y <-> ele mapping
+                    ele_vals_all = [pt.get("ele", 0.0) for pt in self._gpx_data]
+                    min_ele_g, max_ele_g = min(ele_vals_all), max(ele_vals_all)
+                    if abs(max_ele_g - min_ele_g) < 0.1:
+                        max_ele_g += 0.1
+                        min_ele_g -= 0.1
+                    top_height = int(self._chart_height_top * h)
+
+                    # invert y_for_ele for current mouse y
+                    y = float(event.pos().y())
+                    y_clamped = max(20.0, min(float(top_height), y))
+                    frac = (top_height - y_clamped) / max(1e-6, (top_height - 20.0))
+                    new_ele = min_ele_g + frac * (max_ele_g - min_ele_g)
+
+                    seg_start = self._drag_seg_start
+                    seg_end = self._drag_seg_end
+                    orig = self._drag_orig_elevations
+                    if not orig:
+                        event.accept()
+                        return
+
+                    prev_idx = self._drag_prev_anchor
+                    next_idx = self._drag_next_anchor
+
+                    # Clamp anchors to segment and bounds
+                    if prev_idx is not None and (prev_idx < seg_start or prev_idx > seg_end):
+                        prev_idx = None
+                    if next_idx is not None and (next_idx < seg_start or next_idx > seg_end):
+                        next_idx = None
+
+                    # Start by restoring original elevations for the whole segment
+                    for j, i in enumerate(range(seg_start, seg_end + 1)):
+                        self._gpx_data[i]["ele"] = orig[j]
+
+                    # Helper to fetch original elevation from cached segment
+                    def orig_ele_at(i: int) -> float:
+                        return orig[i - seg_start]
+
+                    if prev_idx is None and next_idx is not None:
+                        # First anchor is the dragged point; interpolate dragged->next
+                        seg_a = idx
+                        seg_b = next_idx
+                        ele_a = new_ele
+                        ele_b = orig_ele_at(seg_b)
+                        length = max(1, seg_b - seg_a)
+                        for i in range(seg_a, seg_b + 1):
+                            t = (i - seg_a) / float(length)
+                            s = t * t * (3.0 - 2.0 * t)  # smoothstep spline
+                            self._gpx_data[i]["ele"] = ele_a + s * (ele_b - ele_a)
+                    elif prev_idx is not None and next_idx is None:
+                        # Last anchor is the dragged point; interpolate prev->dragged
+                        seg_a = prev_idx
+                        seg_b = idx
+                        ele_a = orig_ele_at(seg_a)
+                        ele_b = new_ele
+                        length = max(1, seg_b - seg_a)
+                        for i in range(seg_a, seg_b + 1):
+                            t = (i - seg_a) / float(length)
+                            s = t * t * (3.0 - 2.0 * t)  # smoothstep spline
+                            self._gpx_data[i]["ele"] = ele_a + s * (ele_b - ele_a)
+                    elif prev_idx is not None and next_idx is not None:
+                        # Middle control: piecewise interpolation prev->dragged and dragged->next,
+                        # keeping prev and next fixed at their original values.
+                        ele_prev = orig_ele_at(prev_idx)
+                        ele_next = orig_ele_at(next_idx)
+
+                        # prev_idx .. idx
+                        if idx > prev_idx:
+                            seg_a = prev_idx
+                            seg_b = idx
+                            length1 = max(1, seg_b - seg_a)
+                            for i in range(seg_a, seg_b + 1):
+                                t = (i - seg_a) / float(length1)
+                                s = t * t * (3.0 - 2.0 * t)  # smoothstep spline
+                                self._gpx_data[i]["ele"] = ele_prev + s * (new_ele - ele_prev)
+
+                        # idx .. next_idx
+                        if next_idx > idx:
+                            seg_a = idx
+                            seg_b = next_idx
+                            length2 = max(1, seg_b - seg_a)
+                            for i in range(seg_a, seg_b + 1):
+                                t = (i - seg_a) / float(length2)
+                                s = t * t * (3.0 - 2.0 * t)  # smoothstep spline
+                                self._gpx_data[i]["ele"] = new_ele + s * (ele_next - new_ele)
+                    else:
+                        # No neighbours known: move only this point
+                        self._gpx_data[idx]["ele"] = new_ele
+
+                    self.update()
+            event.accept()
         else:
             event.ignore()
 
     def mouseReleaseEvent(self, event):
         if event.button() == Qt.RightButton and self._dragging_scroll:
             self._dragging_scroll = False
+            event.accept()
+        elif event.button() == Qt.LeftButton and self._elevation_edit_mode and self._dragging_ele_idx is not None:
+            # Finish elevation edit and notify listeners
+            idx = self._dragging_ele_idx
+            self._dragging_ele_idx = None
+            self._drag_prev_anchor = None
+            self._drag_next_anchor = None
+            self._drag_seg_start = None
+            self._drag_seg_end = None
+            self._drag_orig_elevations = None
+            if 0 <= idx < len(self._gpx_data):
+                new_ele = float(self._gpx_data[idx].get("ele", 0.0))
+                self.elevationPointEdited.emit(idx, new_ele)
             event.accept()
         else:
             event.ignore()
@@ -426,6 +624,20 @@ class ChartWidget(QWidget):
 
         # 1) Elevation-Linie (gelb, 2px)
         draw_polyline(painter, path_ele, QColor(255, 255, 0), thickness=2)
+
+        # Optional: elevation edit skeleton (thicker overlay with control points)
+        if self._elevation_edit_mode and self._ele_control_indices:
+            # overlay line
+            draw_polyline(painter, path_ele, QColor(255, 215, 0, 220), thickness=3)
+            # control points as larger circles
+            painter.setBrush(QBrush(QColor(255, 165, 0)))
+            painter.setPen(QPen(QColor(0, 0, 0, 150), 1))
+            control_radius = 4
+            for idx in self._ele_control_indices:
+                if 0 <= idx < len(path_ele):
+                    xx, yy = path_ele[idx]
+                    if -20 < xx < w + 20:
+                        painter.drawEllipse(QPointF(xx, yy), control_radius, control_radius)
 
         # --- NEU: 0-Meter-Linie im Höhenbereich --------------------------------
         # Fälle:
@@ -763,7 +975,96 @@ class ChartWidget(QWidget):
                 event.accept()
                 return
 
-            # 2) normaler Left-Click ins Chart -> Marker dahin
+            # 2) Elevation edit mode: start dragging nearest control point (if close)
+            if self._elevation_edit_mode and self._ele_control_indices:
+                click_x = event.pos().x()
+                click_y = event.pos().y()
+                # Rebuild elevation path to know current positions
+                count = len(self._gpx_data)
+                if count >= 2:
+                    w = self.width()
+                    h = self.height()
+                    chart_width = w * self._zoom_factor
+                    ele_vals = [pt.get("ele", 0.0) for pt in self._gpx_data]
+                    min_ele, max_ele = min(ele_vals), max(ele_vals)
+                    if abs(max_ele - min_ele) < 0.1:
+                        max_ele += 0.1
+                        min_ele -= 0.1
+                    top_height = int(self._chart_height_top * h)
+
+                    def x_for_index(i: int) -> float:
+                        ratio = i / (count - 1)
+                        return ratio * chart_width - self._horizontal_offset
+
+                    def y_for_ele(e: float) -> float:
+                        frac = (e - min_ele) / (max_ele - min_ele)
+                        return top_height - (frac * (top_height - 20))
+
+                    # find nearest control point within a small radius
+                    nearest_idx = None
+                    nearest_dist_sq = (8 ** 2)  # pixels squared
+                    for idx in self._ele_control_indices:
+                        if 0 <= idx < count:
+                            xx = x_for_index(idx)
+                            yy = y_for_ele(ele_vals[idx])
+                            dx = xx - click_x
+                            dy = yy - click_y
+                            dist_sq = dx * dx + dy * dy
+                            if dist_sq <= nearest_dist_sq:
+                                nearest_dist_sq = dist_sq
+                                nearest_idx = idx
+                    if nearest_idx is not None:
+                        self._dragging_ele_idx = nearest_idx
+                        # Precompute segment anchors for this drag (previous/next control)
+                        try:
+                            pos = self._ele_control_indices.index(nearest_idx)
+                        except ValueError:
+                            self._drag_prev_anchor = None
+                            self._drag_next_anchor = None
+                            self._drag_seg_start = None
+                            self._drag_seg_end = None
+                            self._drag_orig_elevations = None
+                        else:
+                            self._drag_prev_anchor = (
+                                self._ele_control_indices[pos - 1] if pos > 0 else None
+                            )
+                            self._drag_next_anchor = (
+                                self._ele_control_indices[pos + 1]
+                                if pos < len(self._ele_control_indices) - 1
+                                else None
+                            )
+                            # Determine affected segment [seg_start, seg_end] and cache original elevations
+                            count = len(self._gpx_data)
+                            prev_idx = self._drag_prev_anchor
+                            next_idx = self._drag_next_anchor
+                            if prev_idx is None and next_idx is not None:
+                                seg_start = nearest_idx
+                                seg_end = next_idx
+                            elif prev_idx is not None and next_idx is None:
+                                seg_start = prev_idx
+                                seg_end = nearest_idx
+                            elif prev_idx is not None and next_idx is not None:
+                                seg_start = prev_idx
+                                seg_end = next_idx
+                            else:
+                                seg_start = nearest_idx
+                                seg_end = nearest_idx
+
+                            seg_start = max(0, min(seg_start, count - 1))
+                            seg_end = max(0, min(seg_end, count - 1))
+                            if seg_end < seg_start:
+                                seg_start, seg_end = seg_end, seg_start
+
+                            self._drag_seg_start = seg_start
+                            self._drag_seg_end = seg_end
+                            self._drag_orig_elevations = [
+                                float(self._gpx_data[i].get("ele", 0.0))
+                                for i in range(seg_start, seg_end + 1)
+                            ]
+                        event.accept()
+                        return
+
+            # 3) normaler Left-Click ins Chart -> Marker dahin
             idx = self._index_for_x(event.pos().x())
             self._marker_index = idx
             self.update()
