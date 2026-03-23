@@ -24,7 +24,7 @@ import json
 from PySide6.QtWidgets import QWidget, QVBoxLayout
 from PySide6.QtCore import QUrl, Signal, Slot, Qt
 from PySide6.QtWebEngineWidgets import QWebEngineView
-from PySide6.QtWebEngineCore import QWebEngineSettings
+from PySide6.QtWebEngineCore import QWebEngineSettings, QWebEngineUrlRequestInterceptor
 from PySide6.QtWebChannel import QWebChannel
 from PySide6.QtCore import QSettings
 
@@ -32,6 +32,20 @@ from core.gpx_parser import get_gpx_video_shift, is_gpx_video_shift_set
 
 
 from .map_bridge import MapBridge
+
+
+class OSMRefererInterceptor(QWebEngineUrlRequestInterceptor):
+    """Ensure OSM tile requests include a valid Referer header."""
+
+    def interceptRequest(self, info):
+        try:
+            host = info.requestUrl().host().lower()
+        except Exception:
+            return
+
+        # OSM tile servers may reject requests without a referer.
+        if host.endswith("tile.openstreetmap.org"):
+            info.setHttpHeader(b"Referer", b"https://www.openstreetmap.org/")
 
 class MapWidget(QWidget):
     # Signal als Klassenattribut
@@ -65,6 +79,9 @@ class MapWidget(QWidget):
         layout.addWidget(self.view)
         # View selbst soll Drops nicht übernehmen:
         self.view.setAcceptDrops(False)
+        # Add Referer for OSM tile requests to prevent HTTP 403 blocks.
+        self._osm_referer_interceptor = OSMRefererInterceptor()
+        self.view.page().profile().setUrlRequestInterceptor(self._osm_referer_interceptor)
 
         # Erlaubt: Remote URLs / z.B. OSM, MapTiler, Mapbox, Bing
         self.view.settings().setAttribute(

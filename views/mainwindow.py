@@ -1148,7 +1148,7 @@ class MainWindow(QMainWindow):
         self.action_edit_elevations_chart = QAction("Edit elevations on chart", self)
         self.action_edit_elevations_chart.setCheckable(True)
         self.action_edit_elevations_chart.setStatusTip("Enable direct elevation editing by dragging control points on the chart.")
-        gpx_info_menu.addAction(self.action_edit_elevations_chart)
+        shortcuts_menu.addAction(self.action_edit_elevations_chart)
         self.action_edit_elevations_chart.toggled.connect(self.chart.set_elevation_edit_mode)
         if FIT_BUILD:
             export_fit = QAction("Export to Fit Immersion", self)
