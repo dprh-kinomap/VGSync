@@ -5768,12 +5768,22 @@ class MainWindow(QMainWindow):
         
     def _haversine_m(self, lat1: float, lon1: float, lat2: float, lon2: float) -> float:
         from math import radians, sin, cos, sqrt, atan2
-        R = 6371000.0  # Erdradius in m
+        R = 6371000.0  # Earth radius in m
         dlat = radians(lat2 - lat1)
         dlon = radians(lon2 - lon1)
         a = sin(dlat/2.0)**2 + cos(radians(lat1)) * cos(radians(lat2)) * sin(dlon/2.0)**2
         c = 2.0 * atan2(sqrt(a), sqrt(1.0 - a))
         return R * c
+
+    def _enu_delta_m(self, lat0: float, lon0: float, lat1: float, lon1: float) -> tuple[float, float]:
+        """Approximate east/north offset in meters from (lat0,lon0) to (lat1,lon1)."""
+        R = 6371000.0
+        dlat = math.radians(lat1 - lat0)
+        dlon = math.radians(lon1 - lon0)
+        lat0r = math.radians(lat0)
+        north = dlat * R
+        east = dlon * R * math.cos(lat0r)
+        return east, north
 
     # ⬇️⬇️⬇️ NEW: Right-click logic – find nearest point in the other slot and jump there
     def jump_to_nearest_point_in_other_slot(self, max_distance_m: float = 40.0):
@@ -7019,7 +7029,7 @@ class MainWindow(QMainWindow):
                     continue
                 items_list.append(item)
         
-        # group by time to apply confidence threshold
+        # Group candidates by frame time (seconds)
         times_map: dict[float, list] = {}
         for item in items_list:
             try:
@@ -7028,100 +7038,100 @@ class MainWindow(QMainWindow):
                 continue
             times_map.setdefault(t, []).append(item)
 
+        # Reference speed for expected step length (meters) from previous point: 20 km/h
+        _ref_kmh = 20.0
+        _ref_mps = _ref_kmh / 3.6
+
         pts = []
-        for t, items in times_map.items():
-            # find best confidence entry
-            best = max(items, key=lambda it: float(it.get("confidence", 0.0)))
-            best_conf = float(best.get("confidence", 0.0))
-            
-            # DEBUG: log details for point around 1:09 (69 seconds) and nearby
-            print(f"\n>>> Time {t}s: {len(items)} candidates, best score: {best_conf:.6f}")
-            for idx, it in enumerate(items):
-                print(f"    [{idx}] Score: {float(it.get('confidence', 0.0)):.6f}, Lat: {it.get('lat'):.8f}, Lon: {it.get('lon'):.8f}, Rank: {it.get('rank', '?')}")
-        
-            # if the best candidate is reasonably confident, drop the rest
-            # threshold can be adjusted later (0.5 seems appropriate)
-            if best_conf > 0.5 and len(items) > 1:
-                # good‑confidence winner – import only the best
-                try:
-                    lat = float(best.get("lat", 0.0))
-                    lon = float(best.get("lon", 0.0))
-                except Exception:
-                    continue
-                dt_obj = _dt.datetime.fromtimestamp(t, _dt.timezone.utc)
-                print(f"    → SELECTED (high conf): Lat {lat:.8f}, Lon {lon:.8f}")
-                pts.append({
-                    "lat": lat,
-                    "lon": lon,
-                    "ele": 0.0,
-                    "time": dt_obj,
-                    "confidence": best_conf,
-                    # carry proposal context if available (default: "anchor")
-                    "context": best.get("context", "anchor")
-                })
+        prev_sel = None  # last accepted point {lat, lon, time, ...}
+        prev_prev_sel = None  # point before last — for forward-direction filter
+
+        for t in sorted(times_map.keys()):
+            items = times_map[t]
+            if not items:
+                continue
+
+            dt_obj = _dt.datetime.fromtimestamp(t, _dt.timezone.utc)
+
+            chosen = None
+            if prev_sel is None:
+                # First frame: no prior geometry — use best model confidence
+                chosen = max(items, key=lambda it: float(it.get("confidence", 0.0)))
             else:
-                # either not confident or single candidate – keep all
-                print(f"    → KEEPING ALL ({len(items)} points)")
-                for it in items:
-                    try:
-                        lat = float(it.get("lat", 0.0))
-                        lon = float(it.get("lon", 0.0))
-                    except Exception:
-                        continue
-                    dt_obj = _dt.datetime.fromtimestamp(t, _dt.timezone.utc)
-                    print(f"       Added: Lat {lat:.8f}, Lon {lon:.8f}")
-                    pts.append({
-                        "lat": lat,
-                        "lon": lon,
-                        "ele": 0.0,
-                        "time": dt_obj,
-                        "confidence": float(it.get("confidence", 0.0)),
-                        # preserve per-frame context if JSON provides it
-                        "context": it.get("context", "anchor")
-                    })
+                dt_sec = (dt_obj - prev_sel["time"]).total_seconds()
+                dt_sec = max(dt_sec, 1e-3)
+                ideal_d = _ref_mps * dt_sec  # meters if moving at ref speed
+                sigma = max(ideal_d * 0.35, 4.0)  # tolerate ~35% of step or 4 m floor
+
+                def _pick_best(items_in, require_forward: bool):
+                    best_score = float("-inf")
+                    best_it = None
+                    for it in items_in:
+                        try:
+                            lat = float(it.get("lat", 0.0))
+                            lon = float(it.get("lon", 0.0))
+                        except Exception:
+                            continue
+                        # Forward direction: displacement prev -> candidate must not oppose
+                        # travel direction prev_prev -> prev (when we have two prior points).
+                        if require_forward and prev_prev_sel is not None:
+                            e0, n0 = self._enu_delta_m(
+                                prev_prev_sel["lat"], prev_prev_sel["lon"],
+                                prev_sel["lat"], prev_sel["lon"],
+                            )
+                            e1, n1 = self._enu_delta_m(
+                                prev_sel["lat"], prev_sel["lon"], lat, lon,
+                            )
+                            len0 = math.hypot(e0, n0)
+                            len1 = math.hypot(e1, n1)
+                            if len0 >= 0.5 and len1 >= 0.1:
+                                cosang = (e0 * e1 + n0 * n1) / (len0 * len1)
+                                if cosang < 0.0:
+                                    continue
+                        dprev = self._haversine_m(
+                            prev_sel["lat"], prev_sel["lon"], lat, lon
+                        )
+                        conf = float(it.get("confidence", 0.0))
+                        w = math.exp(-((dprev - ideal_d) ** 2) / (2.0 * sigma * sigma))
+                        score = conf * w
+                        if score > best_score:
+                            best_score = score
+                            best_it = it
+                    return best_it
+
+                chosen = _pick_best(items, require_forward=True)
+                if chosen is None:
+                    chosen = _pick_best(items, require_forward=False)
+                if chosen is None:
+                    chosen = max(items, key=lambda it: float(it.get("confidence", 0.0)))
+
+            try:
+                lat = float(chosen.get("lat", 0.0))
+                lon = float(chosen.get("lon", 0.0))
+            except Exception:
+                continue
+
+            best_conf = float(chosen.get("confidence", 0.0))
+            print(
+                f">>> Time {t}s: {len(items)} candidates -> picked conf={best_conf:.4f} "
+                f"(20 km/h + forward direction vs previous segment)"
+            )
+
+            pt = {
+                "lat": lat,
+                "lon": lon,
+                "ele": 0.0,
+                "time": dt_obj,
+                "confidence": best_conf,
+                "context": chosen.get("context", "anchor"),
+            }
+            pts.append(pt)
+            prev_prev_sel = prev_sel
+            prev_sel = pt
 
         if not pts:
             QMessageBox.information(self, "Import Proposals", "No valid points found in JSON.")
             return
-
-        # sort by time
-        pts.sort(key=lambda p: p["time"])
-
-        # second pass: refine groups with >1 candidate by neighbour distance
-        if len(pts) >= 2:
-            refined = []
-            i = 0
-            n = len(pts)
-            while i < n:
-                tval = pts[i]["time"]
-                # collect group with same time
-                j = i
-                group = []
-                while j < n and pts[j]["time"] == tval:
-                    group.append(pts[j])
-                    j += 1
-                if len(group) <= 1:
-                    refined.append(group[0])
-                else:
-                    prev_pt = refined[-1] if refined else None
-                    next_pt = pts[j] if j < n else None
-                    if prev_pt is None or next_pt is None:
-                        # no neighbours on one side -> fall back to confidence
-                        best = max(group, key=lambda p: p.get("confidence", 0))
-                        refined.append(best)
-                    else:
-                        best_score = -1.0
-                        best_pt = None
-                        for pt in group:
-                            dprev = self._haversine_m(prev_pt["lat"], prev_pt["lon"], pt["lat"], pt["lon"])
-                            dnext = self._haversine_m(pt["lat"], pt["lon"], next_pt["lat"], next_pt["lon"])
-                            score = (1.0 / (dprev + dnext + 1e-6)) * pt.get("confidence", 0)
-                            if score > best_score:
-                                best_score = score
-                                best_pt = pt
-                        refined.append(best_pt)
-                i = j
-            pts = refined
 
         # outlier removal:
         # - for regular "anchor" points: treat as outlier if inserting them
