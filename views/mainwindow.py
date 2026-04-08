@@ -2017,21 +2017,23 @@ class MainWindow(QMainWindow):
             self.video_control.show_ovl_button(True)
             self.overlay_setup_action.setEnabled(True)
 
-        # Abfrage: nur wenn alter Modus 'off' war + neuer Modus copy/encode
-        if old_mode == "off" and new_mode in ("copy", "encode"):
+        # Ask only when switching OFF -> copy/encode and at least one existing
+        # video is currently loaded. If project restore removed missing videos,
+        # skip the indexing question entirely.
+        available_videos = [p for p in self.playlist if p and os.path.exists(p)]
+        if old_mode == "off" and new_mode in ("copy", "encode") and available_videos:
             answer = QMessageBox.question(
                 self,
                 "Index Videos?",
                 "Do you want to index all currently loaded videos now?\n"
                 "(Currently loaded videos: %d)\n\n"
                 "Any *new* video you load from now on will also be indexed automatically."
-                % len(self.playlist),
+                % len(available_videos),
                 QMessageBox.Yes | QMessageBox.No,
                 QMessageBox.No
             )
             if answer == QMessageBox.Yes:
-                # Selbst wenn playlist leer ist, tut das einfach nichts
-                for video_path in self.playlist:
+                for video_path in available_videos:
                     self.start_indexing_process(video_path)
             else:
                 self._userDeclinedIndexing = True    
@@ -3024,11 +3026,48 @@ class MainWindow(QMainWindow):
         
 
         # 1) Länge in km (ggf. ab "grauem" Start trimmen)
-        
-        total_dist_m = 0.0
+        #    Robust against GPS spikes: skip segments with unrealistic speed.
+        speed_samples_mps = []
         for i in range(max(1, start_idx + 1), len(data)):
-            total_dist_m += data[i].get("delta_m", 0.0)
+            seg_m = float(data[i].get("delta_m", 0.0) or 0.0)
+            t_prev = data[i - 1].get("time")
+            t_cur = data[i].get("time")
+            if not (t_prev and t_cur):
+                continue
+            dt = (t_cur - t_prev).total_seconds()
+            if dt <= 0:
+                continue
+            sp = seg_m / dt
+            # robust baseline: ignore obvious outliers while estimating typical speed
+            if 0.0 < sp <= 25.0:
+                speed_samples_mps.append(sp)
+        if speed_samples_mps:
+            speed_samples_mps.sort()
+            median_sp_mps = speed_samples_mps[len(speed_samples_mps) // 2]
+        else:
+            median_sp_mps = 5.0
+        max_len_speed_mps = max(16.7, median_sp_mps * 10.0)
+        max_len_speed_kmh = max_len_speed_mps * 3.6
+        total_dist_m = 0.0
+        skipped_spike_segments = 0
+        for i in range(max(1, start_idx + 1), len(data)):
+            seg_m = float(data[i].get("delta_m", 0.0) or 0.0)
+            t_prev = data[i - 1].get("time")
+            t_cur = data[i].get("time")
+            if t_prev and t_cur:
+                dt = (t_cur - t_prev).total_seconds()
+                if dt > 0:
+                    seg_speed = seg_m / dt
+                    if seg_speed > max_len_speed_mps:
+                        skipped_spike_segments += 1
+                        continue
+            total_dist_m += seg_m
         length_km = total_dist_m / 1000.0
+        if skipped_spike_segments > 0:
+            print(
+                f"[DEBUG] Length(GPX): skipped {skipped_spike_segments} spike segment(s) "
+                f"> {max_len_speed_kmh:.0f} km/h"
+            )
 
 
         
@@ -7295,10 +7334,33 @@ class MainWindow(QMainWindow):
         # does not exceed ~60 km/h (16.7 m/s), with one exception:
         # - very high speed *into* a jump_after/motion_after is allowed
         #   (video cut), but very high speed *out of* such a point is not.
+        # Additionally, impossible spikes are always dropped regardless of context.
         if len(pts) >= 2:
             print(f"\nGlobal speed check: checking {len(pts)} points")
             final_pts = [pts[0]]
             last_kept = pts[0]
+            speed_samples = []
+            for j in range(1, len(pts)):
+                dt_j = (pts[j]["time"] - pts[j - 1]["time"]).total_seconds()
+                if dt_j <= 0:
+                    continue
+                dist_j = self._haversine_m(
+                    pts[j - 1]["lat"], pts[j - 1]["lon"],
+                    pts[j]["lat"], pts[j]["lon"]
+                )
+                sp_j = dist_j / dt_j
+                if 0.0 < sp_j <= 25.0:
+                    speed_samples.append(sp_j)
+            if speed_samples:
+                speed_samples.sort()
+                median_sp = speed_samples[len(speed_samples) // 2]
+            else:
+                median_sp = 5.0
+            hard_spike_mps = max(25.0, median_sp * 10.0)
+            print(
+                f"[DEBUG] hard spike threshold: {hard_spike_mps:.2f} m/s "
+                f"({hard_spike_mps*3.6:.1f} km/h)"
+            )
             for i in range(1, len(pts)):
                 curr_pt = pts[i]
                 dt = (curr_pt["time"] - last_kept["time"]).total_seconds()
@@ -7316,6 +7378,12 @@ class MainWindow(QMainWindow):
                     f"Global speed check between idx? and {i}: dt={dt:.1f}s, dist={dist:.1f}m, speed={speed:.2f}m/s",
                     end=""
                 )
+
+                # Hard guard: never keep impossible spikes (e.g. tens of km in 1 second),
+                # even if context says jump_after.
+                if speed > hard_spike_mps:
+                    print(" → impossible spike, dropping current point")
+                    continue
 
                 # Allow arbitrarily high speed INTO a jump_after/motion_after
                 # (cut boundary), but enforce the limit for all other segments.
