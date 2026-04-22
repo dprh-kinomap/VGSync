@@ -611,6 +611,7 @@ class MainWindow(QMainWindow):
         # --- Project Save / Save As ---
         self.save_project_action = QAction("Save Project", self)
         self.save_project_action.setStatusTip("Save the current project to the existing project file.")
+        self.save_project_action.setShortcut(QKeySequence("Ctrl+S"))
         self.save_project_action.triggered.connect(self.save_project)
         self.save_project_action.setEnabled(False)  # erst aktivieren, wenn ein Pfad existiert
         file_menu.addAction(self.save_project_action)

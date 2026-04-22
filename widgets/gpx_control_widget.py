@@ -26,6 +26,7 @@ import math
 import urllib.request
 import urllib.error
 import json
+import time
 import sys, os
 
 from pathlib import Path
@@ -33,7 +34,7 @@ from pathlib import Path
 
 from PySide6.QtCore import Qt, Signal, QPoint, QUrl, QEvent
 from PySide6.QtGui import QIcon, QPixmap, QCursor, QDesktopServices
-from PySide6.QtWidgets import QWidget, QHBoxLayout, QPushButton, QStyle, QVBoxLayout, QLabel, QSizePolicy, QFrame, QMenu, QDialog, QRadioButton, QButtonGroup, QDoubleSpinBox, QMessageBox, QFileDialog, QLineEdit
+from PySide6.QtWidgets import QWidget, QHBoxLayout, QPushButton, QStyle, QVBoxLayout, QLabel, QSizePolicy, QFrame, QMenu, QDialog, QRadioButton, QButtonGroup, QDoubleSpinBox, QMessageBox, QFileDialog, QLineEdit, QProgressDialog, QApplication
 import os
 
 
@@ -587,12 +588,34 @@ class GPXControlWidget(QWidget):
         gpx_data = mw.gpx_widget.gpx_list._gpx_data
 
         # OpenTopoData configuration
-        DATASET = "eudem25m"  # can be adjusted if needed
+        DATASET = "aster30m,srtm30m,mapzen"  # multiple datasets for better global coverage
         BASE_URL = f"https://api.opentopodata.org/v1/{DATASET}"
-        BATCH_SIZE = 80  # keep batches small to avoid very long URLs and rate limits
+        # Progressive batching: request up to 240 locations per call to reduce
+        # the total number of requests. Some environments impose URL length
+        # limits, so we check and fall back to smaller sub-batches if needed.
+        BATCH_SIZE = 240
+        SAFE_SUB_BATCH = 80
+        MAX_URL_LEN = 1800
+        SLEEP_BETWEEN_REQUESTS = 0.25
+        # Retry/backoff parameters for HTTP 429 handling
+        MAX_RETRIES = 5
+        BACKOFF_BASE = 1.0
 
         successful_points = 0
         request_count = 0
+
+        # Progress UI
+        total_points = len(latlon_list)
+        progress = None
+        try:
+            progress = QProgressDialog("Fetching elevation data...", "Cancel", 0, total_points, self)
+            progress.setWindowModality(Qt.WindowModal)
+            progress.setMinimumDuration(200)
+            progress.setAutoClose(True)
+            progress.setValue(0)
+            progress.show()
+        except Exception:
+            progress = None
 
         # Split into batches to respect API limits (and keep URL length modest)
         for i in range(0, len(latlon_list), BATCH_SIZE):
@@ -600,47 +623,90 @@ class GPXControlWidget(QWidget):
             if not batch:
                 continue
 
+            # If the constructed URL would be too long, split into safe sub-batches
             locations_param = "|".join(f"{lat},{lon}" for _, lat, lon in batch)
             url = f"{BASE_URL}?locations={locations_param}"
+            sub_batches = [batch]
+            if len(url) > MAX_URL_LEN:
+                # create smaller sub-batches to respect URL limits
+                sub_batches = [batch[j:j + SAFE_SUB_BATCH] for j in range(0, len(batch), SAFE_SUB_BATCH)]
 
-            try:
-                with urllib.request.urlopen(url, timeout=10) as response:
-                    data = json.loads(response.read().decode("utf-8"))
-                request_count += 1
-            except urllib.error.HTTPError as e:
-                if e.code == 429:
+            for sub in sub_batches:
+                if not sub:
+                    continue
+                # support user cancelling the operation
+                if progress and progress.wasCanceled():
+                    return (successful_points, request_count)
+                locations_param = "|".join(f"{lat},{lon}" for _, lat, lon in sub)
+                url = f"{BASE_URL}?locations={locations_param}"
+
+                # Try with retry/backoff on 429 responses. Respect Retry-After header if provided.
+                attempt = 0
+                data = None
+                while attempt < MAX_RETRIES:
+                    try:
+                        with urllib.request.urlopen(url, timeout=15) as response:
+                            data = json.loads(response.read().decode("utf-8"))
+                        request_count += 1
+                        break
+                    except urllib.error.HTTPError as e:
+                        if e.code == 429:
+                            # honor Retry-After header when present
+                            retry_after = None
+                            try:
+                                retry_after = int(e.headers.get('Retry-After')) if getattr(e, 'headers', None) else None
+                            except Exception:
+                                retry_after = None
+                            wait = retry_after if retry_after is not None else (BACKOFF_BASE * (2 ** attempt))
+                            time.sleep(min(wait, 30))
+                            attempt += 1
+                            continue
+                        QMessageBox.warning(self, "OpenTopoData Error",
+                                            f"HTTP error while fetching elevation data:\n{e}")
+                        return (successful_points, request_count)
+                    except urllib.error.URLError as e:
+                        QMessageBox.warning(self, "OpenTopoData Error",
+                                            f"Could not reach OpenTopoData service:\n{e}")
+                        return (successful_points, request_count)
+                    except Exception as e:
+                        QMessageBox.warning(self, "OpenTopoData Error",
+                                            f"Unexpected error while fetching elevation data:\n{e}")
+                        return (successful_points, request_count)
+
+                if data is None:
                     QMessageBox.warning(
                         self,
                         "OpenTopoData Rate Limit",
-                        "OpenTopoData returned HTTP 429 (Too Many Requests).\n"
+                        "OpenTopoData returned HTTP 429 repeatedly.\n"
                         "Please wait a bit and try again, or select a smaller GPX range."
                     )
                     return (successful_points, request_count)
-                QMessageBox.warning(self, "OpenTopoData Error",
-                                    f"HTTP error while fetching elevation data:\n{e}")
-                return (successful_points, request_count)
-            except urllib.error.URLError as e:
-                QMessageBox.warning(self, "OpenTopoData Error",
-                                    f"Could not reach OpenTopoData service:\n{e}")
-                return (successful_points, request_count)
-            except Exception as e:
-                QMessageBox.warning(self, "OpenTopoData Error",
-                                    f"Unexpected error while fetching elevation data:\n{e}")
-                return (successful_points, request_count)
 
-            status = data.get("status")
-            results = data.get("results", [])
-            if status != "OK" or not results:
-                # Soft failure for this batch – continue with remaining batches
-                continue
-
-            # Map results back to GPX points
-            for (gpx_i, _, _), res in zip(batch, results):
-                elev = res.get("elevation")
-                if elev is None:
+                status = data.get("status")
+                results = data.get("results", [])
+                if status != "OK" or not results:
+                    # Soft failure for this sub-batch – continue with remaining
                     continue
-                gpx_data[gpx_i]["ele"] = elev
-                successful_points += 1
+
+                # Map results back to GPX points
+                for (gpx_i, _, _), res in zip(sub, results):
+                    elev = res.get("elevation")
+                    if elev is None:
+                        continue
+                    gpx_data[gpx_i]["ele"] = elev
+                    successful_points += 1
+
+                # polite pause to avoid triggering rate limits
+                if progress and progress.wasCanceled():
+                    return (successful_points, request_count)
+                # update progress by number of points in this sub-batch
+                try:
+                    if progress:
+                        progress.setValue(min(total_points, progress.value() + len(sub)))
+                        QApplication.processEvents()
+                except Exception:
+                    pass
+                time.sleep(SLEEP_BETWEEN_REQUESTS)
 
         return (successful_points, request_count)
 
@@ -3212,45 +3278,58 @@ class GPXControlWidget(QWidget):
         lat1, lon1 = gpx_data[b_idx]["lat"], gpx_data[b_idx]["lon"]
         lat2, lon2 = gpx_data[e_idx]["lat"], gpx_data[e_idx]["lon"]
 
-        # 2) Key prüfen
+        # 2) Check API key
         if not mw._mapbox_key:
-            QMessageBox.warning(self, "Mapbox Key missing",
-                "Directions=True, aber kein mapbox_key gesetzt.\nFalle zurück auf lokale Interpolation.")
+            QMessageBox.warning(self, "Mapbox Key Missing",
+                "Mapbox directions enabled but no API key configured.\nFalling back to local interpolation.")
             self._close_gaps_local_interpolation(b_idx, e_idx, dt)
             return
 
-        # 3) URL bauen (Mapbox-Directions)
+        # 3) Build Mapbox directions URL
         base_url = "https://api.mapbox.com/directions/v5/mapbox"
         url = (f"{base_url}/{profile}/{lon1:.6f},{lat1:.6f};{lon2:.6f},{lat2:.6f}"
             f"?geometries=geojson&overview=full&access_token={mw._mapbox_key}")
     
-        # 4) HTTP an Mapbox per urllib
+        # 4) Fetch route from Mapbox via HTTP
         try:
             with urllib.request.urlopen(url, timeout=10) as resp:
                 body = resp.read().decode("utf-8")
             data = json.loads(body)
+        except urllib.error.URLError as ex:
+            # Network error (DNS, connection refused, timeout, no internet, etc.)
+            error_msg = (
+                "Could not connect to Mapbox (network error).\n\n"
+                "Possible causes:\n"
+                "• No internet connection\n"
+                "• DNS resolution failed\n"
+                "• Connection timeout\n\n"
+                f"Details: {ex.reason}\n\n"
+                "Falling back to local interpolation."
+            )
+            QMessageBox.critical(self, "Mapbox Network Error", error_msg)
+            self._close_gaps_local_interpolation(b_idx, e_idx, dt)
+            return
         except Exception as ex:
             QMessageBox.critical(self, "Mapbox Error",
-                f"Could not fetch route from Mapbox:\n{ex}\n\nFalle zurück auf lokale Interpolation.")
+                f"Could not fetch route from Mapbox:\n{ex}\n\nFalling back to local interpolation.")
             self._close_gaps_local_interpolation(b_idx, e_idx, dt)
             return
 
         if "routes" not in data or not data["routes"]:
             QMessageBox.warning(self, "No Route",
-                "Mapbox lieferte keine 'routes' zurück.\nFalle zurück auf lokal.")
+                "Mapbox returned no routes.\nFalling back to local interpolation.")
             self._close_gaps_local_interpolation(b_idx, e_idx, dt)
             return
 
         coords = data["routes"][0]["geometry"]["coordinates"]  # => [[lon, lat], [lon, lat], ...]
     
         if len(coords) < 2:
-            QMessageBox.warning(self, "Invalid route",
-                "Zu wenige Punkte in Mapbox-Route.\nFalle zurück auf lokal.")
+            QMessageBox.warning(self, "Invalid Route",
+                "Too few points in Mapbox route.\nFalling back to local interpolation.")
             self._close_gaps_local_interpolation(b_idx, e_idx, dt)
             return
 
-        # 5) Distanzberechnung => wir bauen Segmente, 
-        #    dann verteilen wir dt in 1s-Schritte => time-based densify
+        # 5) Calculate distance: build segments, then distribute dt in 1s steps for time-based densify
         def haversine_m(latA, lonA, latB, lonB):
             import math
             R = 6371000
@@ -3262,7 +3341,7 @@ class GPXControlWidget(QWidget):
                 + math.cos(rLA)*math.cos(rLB)*math.sin(dLon/2)**2)
             return R*2*math.atan2(math.sqrt(a), math.sqrt(1-a))
 
-        # Koords in (lat, lon) => big_coords
+        # Convert coordinates to (lat, lon) format
         big_coords = [(c[1], c[0]) for c in coords]  # c[0]=lon, c[1]=lat
 
         segments = []
@@ -3280,7 +3359,7 @@ class GPXControlWidget(QWidget):
             self._close_gaps_local_interpolation(b_idx, e_idx, dt)
             return
 
-        # Hilfsfunc
+        # Helper function: get coordinate at given distance along route
         def get_coord_at_dist(dist_val):
             # dist_val=0 => Start, dist_val>=total_dist => End
             if dist_val<=0:
@@ -3298,7 +3377,7 @@ class GPXControlWidget(QWidget):
             # fallback
             return big_coords[-1]
 
-        # => now 1s-Schritte
+        # Now process 1-second steps along the route
        
         new_points = []
         t_start = gpx_data[b_idx]["time"]

@@ -454,7 +454,7 @@ class ChartWidget(QWidget):
 
         mods = event.modifiers()
         if (mods & Qt.ShiftModifier):
-            # horizontal scroll
+            # horizontal scroll with Shift+wheel
             if delta > 0:
                 self._horizontal_offset = max(0, self._horizontal_offset - self._scroll_speed_px)
             else:
@@ -463,23 +463,19 @@ class ChartWidget(QWidget):
             event.accept()
             return
 
-        if (mods & Qt.ControlModifier):
-            # zoom
-            factor = 1.1 if delta > 0 else (1.0 / 1.1)
-            new_zoom = self._zoom_factor * factor
-            if new_zoom < self._min_zoom:
-                new_zoom = self._min_zoom
-            if new_zoom > self._max_zoom:
-                new_zoom = self._max_zoom
+        # Default: zoom with mouse wheel (no modifier needed)
+        factor = 1.1 if delta > 0 else (1.0 / 1.1)
+        new_zoom = self._zoom_factor * factor
+        if new_zoom < self._min_zoom:
+            new_zoom = self._min_zoom
+        if new_zoom > self._max_zoom:
+            new_zoom = self._max_zoom
 
-            old_zoom = self._zoom_factor
-            self._zoom_factor = new_zoom
-            self._center_marker(0.3)
-            self.update()
-            event.accept()
-            return
-
-        super().wheelEvent(event)
+        old_zoom = self._zoom_factor
+        self._zoom_factor = new_zoom
+        self._center_marker(0.3)
+        self.update()
+        event.accept()
 
     def _center_marker(self, widget_ratio: float):
         count = len(self._gpx_data)
@@ -575,10 +571,25 @@ class ChartWidget(QWidget):
     
         min_ele, max_ele = min(ele_vals), max(ele_vals)
         min_spd, max_spd = min(speed_vals), max(speed_vals)
-    
-        if abs(max_ele - min_ele) < 0.1:
-            max_ele += 0.1
-            min_ele -= 0.1
+
+        # Make a plotting range that is robust and includes 0m when it
+        # makes sense. If all elevations are above 0, include 0 as
+        # lower bound so the 0m-line is placed correctly below the
+        # lowest data point (instead of coinciding with it).
+        plot_min_ele = min_ele
+        plot_max_ele = max_ele
+
+        # If the entire range is above 0, include 0 as lower bound.
+        if min_ele > 0.0:
+            plot_min_ele = 0.0
+        # If the entire range is below 0, include 0 as upper bound.
+        if max_ele < 0.0:
+            plot_max_ele = 0.0
+
+        if abs(plot_max_ele - plot_min_ele) < 0.1:
+            plot_max_ele = plot_max_ele + 0.1
+            plot_min_ele = plot_min_ele - 0.1
+
         if abs(max_spd - min_spd) < 0.1:
             max_spd += 0.1
             min_spd -= 0.1
@@ -591,7 +602,7 @@ class ChartWidget(QWidget):
             return ratio * chart_width - self._horizontal_offset
     
         def y_for_ele(e: float) -> float:
-            frac = (e - min_ele) / (max_ele - min_ele)
+            frac = (e - plot_min_ele) / (plot_max_ele - plot_min_ele)
             return top_height - (frac * (top_height - 20))
     
         def y_for_speed(s: float) -> float:
@@ -647,21 +658,24 @@ class ChartWidget(QWidget):
         
         
         # --- 0-Meter-Linie im Höhenbereich (robust) -------------------------------
+        # Compute zero-line position using the plotting range. If 0m is
+        # within the plotted range, draw the 0m line at the correct
+        # vertical position. Otherwise draw a subtle guide at the edge
+        # of the elevation plot.
         eps = 1e-6
         has_only_above = (min_ele > 0.0 + eps)
         has_only_below = (max_ele < 0.0 - eps)
 
-        if not (has_only_above or has_only_below):
-            # 0 liegt im Bereich -> echte 0-m-Position
+        if plot_min_ele <= 0.0 <= plot_max_ele:
             zero_y = y_for_ele(0.0)
-            pen = QPen(QColor(255, 80, 80), 1, Qt.DashLine)  # gut sichtbar
+            pen = QPen(QColor(255, 80, 80), 1, Qt.DashLine)
         elif has_only_above:
-            # alles über 0 -> Linie dezent am unteren Rand des Höhenplots
+            # all data above zero -> subtle line at bottom of elevation plot
             zero_y = int(top_height) - 1
             pen = QPen(QColor(140, 140, 140), 1, Qt.DashLine)
         else:
-            # alles unter 0 -> Linie dezent am oberen Rand des Höhenplots
-            zero_y = 20  # Plot beginnt ab ~20px
+            # all data below zero -> subtle line at top of elevation plot
+            zero_y = 20
             pen = QPen(QColor(140, 140, 140), 1, Qt.DashLine)
 
         painter.setPen(pen)
@@ -832,6 +846,55 @@ class ChartWidget(QWidget):
         y0_spd = max(top_height, min(h - 1, y0_spd))
         painter.setPen(QColor(180, 180, 180))
         painter.drawText(6, y0_spd - 2, "0 km/h")
+        
+        # --- X-Axis Time Labels ---
+        if self._gpx_data and self._gpx_data[0].get("time"):
+            try:
+                time_label_font = QFont(self.font().family(), max(7, int(h * 0.02)))
+                painter.setFont(time_label_font)
+            except Exception:
+                pass
+            
+            painter.setPen(QColor(150, 150, 150))
+            
+            # Calculate time span
+            start_time = self._gpx_data[0]["time"]
+            end_time = self._gpx_data[-1]["time"]
+            total_secs = (end_time - start_time).total_seconds()
+            
+            # Determine a good interval for time labels (every 60s, 300s, 600s, 1800s, etc.)
+            if total_secs <= 300:
+                interval_secs = 60
+            elif total_secs <= 600:
+                interval_secs = 120
+            elif total_secs <= 1800:
+                interval_secs = 300
+            elif total_secs <= 3600:
+                interval_secs = 600
+            else:
+                interval_secs = 1800
+            
+            # Draw time labels at intervals
+            for offset in range(0, int(total_secs) + 1, interval_secs):
+                current_time = start_time + timedelta(seconds=offset)
+                
+                # Find index closest to this time
+                idx = 0
+                for i, pt in enumerate(self._gpx_data):
+                    if pt.get("time") and pt["time"] <= current_time:
+                        idx = i
+                
+                x = x_for_index(idx)
+                if -10 < x < w + 10:
+                    # Format time as MM:SS
+                    minutes = offset // 60
+                    seconds = offset % 60
+                    time_str = f"{minutes}:{seconds:02d}"
+                    # Draw label higher up (at bottom of chart area, with padding)
+                    painter.drawText(int(x) - 20, h - 35, 40, 15, Qt.AlignCenter, time_str)
+                    
+                    # Draw a small tick mark
+                    painter.drawLine(int(x), h - 22, int(x), h - 27)
         
         try:
             from core.gpx_parser import get_gpx_video_shift
