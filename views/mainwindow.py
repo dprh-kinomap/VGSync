@@ -29,6 +29,7 @@ import base64
 import config
 import path_manager  # your module above
 import urllib.request
+import urllib.parse
 import copy
 import tempfile
 import datetime
@@ -884,13 +885,16 @@ class MainWindow(QMainWindow):
         self.action_map_directions.setCheckable(True)
         self.action_map_directions.setChecked(False)  # standard: aus
         
+        self.action_search_location = QAction("Search location...", self)
+        self.action_search_location.setStatusTip("Search a place by name using OpenStreetMap/Nominatim")
 
         # 3) Ins Menü einfügen
         map_setup_menu.addAction(self.action_map_directions)
+        map_setup_menu.addAction(self.action_search_location)
 
         # 4) Signal verknüpfen
         self.action_map_directions.triggered.connect(self._on_map_directions_toggled)
-        
+        self.action_search_location.triggered.connect(self._on_search_location_triggered)
         
         mapviews_menu = map_setup_menu.addMenu("Map Keys")
         
@@ -1473,7 +1477,100 @@ class MainWindow(QMainWindow):
             self._edit_mode_directions_checked = checked
         elif self._current_view_mode == "create":
             self._create_mode_directions_checked = checked
-        
+
+    def _nominatim_search(self, query: str, accept_language: str | None = None, countrycodes: str | None = None):
+        base_url = "https://nominatim.openstreetmap.org/search"
+        params = {
+            "format": "json",
+            "limit": "6",
+            "q": query,
+        }
+        if accept_language:
+            params["accept-language"] = accept_language
+        if countrycodes:
+            params["countrycodes"] = countrycodes
+
+        url = base_url + "?" + urllib.parse.urlencode(params, safe=":,()")
+        request = urllib.request.Request(
+            url,
+            headers={
+                "User-Agent": "KVRouite/1.0 (location search via OSM Nominatim)"
+            }
+        )
+        with urllib.request.urlopen(request, timeout=15) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+
+    def _on_search_location_triggered(self):
+        query, ok = QInputDialog.getText(self, "Search location", "Enter location name or address:")
+        if not ok or not query.strip():
+            return
+
+        query = query.strip()
+        results = []
+        try:
+            # First try standard search
+            results = self._nominatim_search(query)
+            if not results and any("\u0400" <= ch <= "\u04FF" for ch in query):
+                # Russian text: prefer Russian language and Russia country scope
+                results = self._nominatim_search(query)
+
+            if not results:
+                # try fewer terms / token-based fallback
+                terms = [t for t in re.split(r"\s+", query) if t]
+                if len(terms) > 1:
+                    fallback_query = " ".join(terms[:2])
+                    results = self._nominatim_search(fallback_query)
+        except Exception as exc:
+            QMessageBox.warning(
+                self,
+                "Search failed",
+                f"Location search failed:\n{exc}"
+            )
+            return
+
+        if not results:
+            QMessageBox.information(
+                self,
+                "No results",
+                "No matching locations were found."
+            )
+            return
+
+        if len(results) == 1:
+            choice = results[0]
+        else:
+            items = [
+                f"{item.get('display_name')} ({item.get('lat')},{item.get('lon')})"
+                for item in results
+            ]
+            selected, ok2 = QInputDialog.getItem(
+                self,
+                "Select location",
+                "Choose location:",
+                items,
+                0,
+                False
+            )
+            if not ok2 or not selected:
+                return
+            choice = next(
+                item for item, text in zip(results, items) if text == selected
+            )
+
+        try:
+            lat = float(choice.get("lat", 0.0))
+            lon = float(choice.get("lon", 0.0))
+        except Exception:
+            QMessageBox.warning(
+                self,
+                "Search failed",
+                "Could not parse the selected location coordinates."
+            )
+            return
+
+        if self.map_widget:
+            self.map_widget.center_on_location(lat, lon, zoom=15)
+
     def _compute_final_time(self, g_s: float) -> float:
         return self.get_final_time_for_global(g_s)    
         

@@ -1336,6 +1336,12 @@
 			map.getView().animate({center: c, zoom: zoomLevel, duration: 300});
 	}
 
+    function centerMap(lat, lon, zoomLevel=15){
+      if(!map || typeof ol === 'undefined') return;
+      const coord = ol.proj.fromLonLat([lon, lat]);
+      map.getView().animate({center: coord, zoom: zoomLevel, duration: 600});
+    }
+
     function setVideoPlayState(isPlaying){
       videoIsPlaying= isPlaying;
       dbg("[DEBUG] setVideoPlayState => "+isPlaying);

@@ -226,6 +226,17 @@ class MapWidget(QWidget):
         js = f"loadRoute({json.dumps(route_geojson)}, {do_fit_str});"
         self.view.page().runJavaScript(js)
 
+    def center_on_location(self, lat: float, lon: float, zoom: int = 15):
+        """
+        Center the map on the given latitude/longitude coordinate.
+        """
+        if self.view and self.view.page():
+            js = (
+                f"if (typeof centerMap === 'function') {{ centerMap({lat}, {lon}, {zoom}); }} "
+                f"else {{ map.getView().animate({{center: ol.proj.fromLonLat([{lon}, {lat}]), zoom: {zoom}, duration: 600}}); }}"
+            )
+            self.view.page().runJavaScript(js)
+
     # ----------------------------------------------------------
     # Markierungen B/E
     # ----------------------------------------------------------
