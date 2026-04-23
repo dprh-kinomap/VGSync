@@ -678,6 +678,11 @@ class GPXListWidget(QWidget):
         self.set_gpx_data(self._gpx_data)
         self.clear_marked_range()
         print("[DEBUG] undo_delete => fertig.")
+        
+        # Update the overview display
+        mw = self.parent().parent()
+        if hasattr(mw, '_update_gpx_overview'):
+            mw._update_gpx_overview()
 
         
         

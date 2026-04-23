@@ -534,6 +534,12 @@ class MainWindow(QMainWindow):
                
         self._gpx_data = []
         
+        self._current_view_mode = "edit"
+        self._edit_mode_sync_checked = False
+        self._edit_mode_directions_checked = False
+        self._create_mode_sync_checked = True
+        self._create_mode_directions_checked = True
+        
         # Abkoppel-Dialoge
         self._video_area_floating_dialog = None
         self._video_placeholder = None
@@ -1446,7 +1452,7 @@ class MainWindow(QMainWindow):
                 )
                 # Häkchen sofort zurücksetzen
                 self.action_map_directions.setChecked(False)
-                return
+                checked = False
 
         # An dieser Stelle Key vorhanden oder Häkchen = False => fortfahren
         self._directions_enabled = checked
@@ -1461,6 +1467,12 @@ class MainWindow(QMainWindow):
             page.runJavaScript(code)
 
         print(f"[DEBUG] Directions enabled => {checked}")
+        
+        # Update mode state
+        if self._current_view_mode == "edit":
+            self._edit_mode_directions_checked = checked
+        elif self._current_view_mode == "create":
+            self._create_mode_directions_checked = checked
         
     def _compute_final_time(self, g_s: float) -> float:
         return self.get_final_time_for_global(g_s)    
@@ -1489,11 +1501,17 @@ class MainWindow(QMainWindow):
 
         self.map_widget.view.page().runJavaScript("enableVideoMapMode(false);")
 
-        # Update the check state and call handler of "sync all with video" and "directions"
-        self.action_new_pts_video_time.setChecked(False)
-        self._on_sync_point_video_time_toggled(False)
-        self.action_map_directions.setChecked(False)
-        self._on_map_directions_toggled(False)
+        # Save current state to create mode
+        self._create_mode_sync_checked = self.action_new_pts_video_time.isChecked()
+        self._create_mode_directions_checked = self.action_map_directions.isChecked()
+        
+        self._current_view_mode = "edit"
+        
+        # Set to edit mode state
+        self.action_new_pts_video_time.setChecked(self._edit_mode_sync_checked)
+        self._on_sync_point_video_time_toggled(self._edit_mode_sync_checked)
+        self.action_map_directions.setChecked(self._edit_mode_directions_checked)
+        self._on_map_directions_toggled(self._edit_mode_directions_checked)
 
 
     def _set_map_video_view(self):
@@ -1507,11 +1525,17 @@ class MainWindow(QMainWindow):
         self.map_widget.view.page().runJavaScript("enableVideoMapMode(true);")
         self.right_v_layout.update()
 
-        # Update the check state and call handler of "sync all with video" and "directions"
-        self.action_new_pts_video_time.setChecked(True)
-        self._on_sync_point_video_time_toggled(True)
-        self.action_map_directions.setChecked(True)
-        self._on_map_directions_toggled(True)
+        # Save current state to edit mode
+        self._edit_mode_sync_checked = self.action_new_pts_video_time.isChecked()
+        self._edit_mode_directions_checked = self.action_map_directions.isChecked()
+        
+        self._current_view_mode = "create"
+        
+        # Set to create mode state
+        self.action_new_pts_video_time.setChecked(self._create_mode_sync_checked)
+        self._on_sync_point_video_time_toggled(self._create_mode_sync_checked)
+        self.action_map_directions.setChecked(self._create_mode_directions_checked)
+        self._on_map_directions_toggled(self._create_mode_directions_checked)
         
     def _on_show_mpv_path(self):
         s = QSettings("KVRouite", "KVRouite")
@@ -2542,6 +2566,8 @@ class MainWindow(QMainWindow):
         
     def _restore_gpx_data(self, gpx_snapshot):
         self._gpx_data = copy.deepcopy(gpx_snapshot)
+        from core.gpx_parser import recalc_gpx_data
+        recalc_gpx_data(self._gpx_data)
         self.gpx_widget.set_gpx_data(self._gpx_data)
         self.chart.set_gpx_data(self._gpx_data)
         geojson = self._build_route_geojson_from_gpx(self._gpx_data)
@@ -2975,6 +3001,12 @@ class MainWindow(QMainWindow):
         
         if hasattr(self, "_active_gpx_slot") and self._active_gpx_slot in self._gpx_slots:
             self._gpx_slots[self._active_gpx_slot]["sync_enabled"] = checked
+        
+        # Update mode state
+        if self._current_view_mode == "edit":
+            self._edit_mode_sync_checked = checked
+        elif self._current_view_mode == "create":
+            self._create_mode_sync_checked = checked
         
    
     
