@@ -88,6 +88,12 @@ class ChartWidget(QWidget):
         self._drag_seg_start = None
         self._drag_seg_end = None
         self._drag_orig_elevations = None
+        self._ele_control_radius = 6
+        self._ele_control_hit_radius = 14
+        self._preferred_ele_control_indices = set()
+        self._ele_min_anchor_gap = 6
+        self._ele_control_hit_x_radius = 18
+        self._ele_control_hit_y_radius = 20
         
     def _prevideo_cut_idx(self) -> int:
         """
@@ -173,8 +179,115 @@ class ChartWidget(QWidget):
         self._usl_indices = [i for i, pt in enumerate(self._gpx_data) if pt.get("ele", 0.0) < 0.0]
         self._usl_idx_cursor = -1
         self._usl_badge_rect = None
+        self._preferred_ele_control_indices = set()
         self._rebuild_elevation_control_indices()
         self.update()
+
+    def refresh_after_elevation_edit(self, preferred_idx: int | None = None):
+        """Refresh draggable elevation controls without resetting zoom/scroll."""
+        self._usl_indices = [i for i, pt in enumerate(self._gpx_data) if pt.get("ele", 0.0) < 0.0]
+        if preferred_idx is not None and 0 <= preferred_idx < len(self._gpx_data):
+            self._preferred_ele_control_indices.add(int(preferred_idx))
+        self._rebuild_elevation_control_indices()
+        self.update()
+
+    def _find_effective_drag_anchors(self, anchor_pos: int, dragged_idx: int):
+        """Return previous/next anchors with enough spacing for a visible drag effect."""
+        prev_idx = None
+        next_idx = None
+
+        for pos in range(anchor_pos - 1, -1, -1):
+            candidate = self._ele_control_indices[pos]
+            if dragged_idx - candidate >= self._ele_min_anchor_gap:
+                prev_idx = candidate
+                break
+
+        for pos in range(anchor_pos + 1, len(self._ele_control_indices)):
+            candidate = self._ele_control_indices[pos]
+            if candidate - dragged_idx >= self._ele_min_anchor_gap:
+                next_idx = candidate
+                break
+
+        # Fallbacks: if nearby controls are dense, still use the outermost control
+        # on each side so the dragged point can influence a larger section.
+        if prev_idx is None and anchor_pos > 0:
+            prev_idx = self._ele_control_indices[0]
+            if prev_idx == dragged_idx:
+                prev_idx = None
+        if next_idx is None and anchor_pos < len(self._ele_control_indices) - 1:
+            next_idx = self._ele_control_indices[-1]
+            if next_idx == dragged_idx:
+                next_idx = None
+
+        return prev_idx, next_idx
+
+    def _elevation_plot_range(self, elevations):
+        """Return the elevation range used for drawing and hit testing."""
+        min_ele = min(elevations)
+        max_ele = max(elevations)
+        plot_min_ele = min_ele
+        plot_max_ele = max_ele
+
+        if min_ele > 0.0:
+            plot_min_ele = 0.0
+        if max_ele < 0.0:
+            plot_max_ele = 0.0
+
+        if abs(plot_max_ele - plot_min_ele) < 0.1:
+            plot_max_ele += 0.1
+            plot_min_ele -= 0.1
+
+        return plot_min_ele, plot_max_ele
+
+    def _pick_elevation_control_point(self, click_x: float, click_y: float):
+        """Find the best draggable elevation control near the cursor."""
+        if not (self._elevation_edit_mode and self._ele_control_indices):
+            return None
+
+        count = len(self._gpx_data)
+        if count < 2:
+            return None
+
+        w = self.width()
+        h = self.height()
+        chart_width = w * self._zoom_factor
+        ele_vals = [pt.get("ele", 0.0) for pt in self._gpx_data]
+        plot_min_ele, plot_max_ele = self._elevation_plot_range(ele_vals)
+        top_height = int(self._chart_height_top * h)
+
+        def x_for_index(i: int) -> float:
+            ratio = i / (count - 1)
+            return ratio * chart_width - self._horizontal_offset
+
+        def y_for_ele(e: float) -> float:
+            frac = (e - plot_min_ele) / (plot_max_ele - plot_min_ele)
+            return top_height - (frac * (top_height - 20))
+
+        best_idx = None
+        best_score = None
+
+        for idx in self._ele_control_indices:
+            if not (0 <= idx < count):
+                continue
+            xx = x_for_index(idx)
+            yy = y_for_ele(ele_vals[idx])
+            dx = abs(xx - click_x)
+            dy = abs(yy - click_y)
+
+            in_rect = (
+                dx <= self._ele_control_hit_x_radius
+                and dy <= self._ele_control_hit_y_radius
+            )
+            in_circle = (dx * dx + dy * dy) <= float(self._ele_control_hit_radius ** 2)
+            if not (in_rect or in_circle):
+                continue
+
+            score = (dx, dy, dx * dx + dy * dy)
+            if best_score is None or score < best_score:
+                best_score = score
+                best_idx = idx
+
+        return best_idx
 
     def _rebuild_elevation_control_indices(self):
         """Rebuild the list of control indices used in elevation edit mode.
@@ -187,53 +300,98 @@ class ChartWidget(QWidget):
         if count == 0:
             return
 
-        # Always include first and last point
-        anchors = {0, count - 1}
+        elevations = [float(pt.get("ele", 0.0)) for pt in self._gpx_data]
+        noise_eps = 1e-3
+
+        def sign_of_delta(delta: float) -> int:
+            if abs(delta) < noise_eps:
+                return 0
+            return 1 if delta > 0.0 else -1
+
+        # Always include first and last point. Strength is used when we need
+        # to cap the number of controls later.
+        anchor_strengths = {
+            0: float("inf"),
+            count - 1: float("inf"),
+        }
+
+        def add_anchor(idx: int, strength: float = 1.0):
+            idx = max(0, min(idx, count - 1))
+            prev = anchor_strengths.get(idx, 0.0)
+            anchor_strengths[idx] = max(prev, float(strength))
 
         if count >= 3:
-            # Collect inflection candidates based on sign changes of the slope
-            prev_delta = None
-            for i in range(1, count - 1):
-                ele_prev = float(self._gpx_data[i - 1].get("ele", 0.0))
-                ele_curr = float(self._gpx_data[i].get("ele", 0.0))
-                ele_next = float(self._gpx_data[i + 1].get("ele", 0.0))
+            i = 1
+            while i < count - 1:
+                run_start = i
+                run_end = i
 
-                d1 = ele_curr - ele_prev
-                d2 = ele_next - ele_curr
+                # Collapse flat plateaus so flat-bottom valleys and flat-top peaks
+                # receive a single anchor in their middle instead of being missed.
+                while (
+                    run_end < count - 1
+                    and abs(elevations[run_end + 1] - elevations[run_end]) < noise_eps
+                ):
+                    run_end += 1
 
-                # ignore tiny noise
-                if abs(d1) < 1e-3:
-                    d1 = 0.0
-                if abs(d2) < 1e-3:
-                    d2 = 0.0
+                left_delta = elevations[run_start] - elevations[run_start - 1]
+                right_delta = (
+                    elevations[run_end + 1] - elevations[run_end]
+                    if run_end < count - 1
+                    else 0.0
+                )
+                left_sign = sign_of_delta(left_delta)
+                right_sign = sign_of_delta(right_delta)
+                turn_strength = abs(left_delta) + abs(right_delta)
 
-                sign1 = 0 if d1 == 0.0 else (1 if d1 > 0 else -1)
-                sign2 = 0 if d2 == 0.0 else (1 if d2 > 0 else -1)
+                if left_sign != 0 and right_sign != 0 and left_sign != right_sign:
+                    add_anchor((run_start + run_end) // 2, turn_strength)
+                elif run_end > run_start:
+                    if left_sign != 0:
+                        add_anchor(run_start, abs(left_delta))
+                    if right_sign != 0:
+                        add_anchor(run_end, abs(right_delta))
+                else:
+                    if left_sign == 0 and right_sign != 0:
+                        add_anchor(run_start, abs(right_delta))
+                    elif left_sign != 0 and right_sign == 0:
+                        add_anchor(run_start, abs(left_delta))
 
-                if sign1 != 0 and sign2 != 0 and sign1 != sign2:
-                    # Clear up/down turn -> local extremum
-                    anchors.add(i)
-                elif sign1 == 0 and sign2 != 0:
-                    # Flat then goes up/down: treat as start of new trend
-                    anchors.add(i)
-                elif sign1 != 0 and sign2 == 0:
-                    # Trend then flat: treat as end of trend
-                    anchors.add(i)
+                i = run_end + 1
 
-        # Limit the number of anchors to keep UI responsive
-        max_controls = 80
-        sorted_anchors = sorted(anchors)
-        if len(sorted_anchors) > max_controls:
-            # Downsample while keeping first and last
-            step = max(1, len(sorted_anchors) // (max_controls - 1))
-            reduced = [sorted_anchors[0]]
-            for i in range(step, len(sorted_anchors) - 1, step):
-                reduced.append(sorted_anchors[i])
-            if sorted_anchors[-1] not in reduced:
-                reduced.append(sorted_anchors[-1])
-            sorted_anchors = sorted(set(reduced))
+        # Fill very large gaps so broad smooth valleys/ridges still expose
+        # a few draggable handles after rebuilding.
+        max_anchor_gap = 24
+        sorted_anchor_indices = sorted(anchor_strengths)
+        for left_idx, right_idx in zip(sorted_anchor_indices, sorted_anchor_indices[1:]):
+            gap = right_idx - left_idx
+            if gap > max_anchor_gap:
+                steps = gap // max_anchor_gap
+                for step_idx in range(1, steps + 1):
+                    interp_idx = left_idx + round(gap * step_idx / (steps + 1))
+                    if 0 < interp_idx < count - 1:
+                        add_anchor(interp_idx, 0.25)
 
-        self._ele_control_indices = sorted_anchors
+        # Keep previously edited controls draggable even if the local shape was
+        # smoothed enough that they are no longer strict extrema.
+        for idx in self._preferred_ele_control_indices:
+            if 0 < idx < count - 1:
+                add_anchor(idx, float("inf"))
+
+        # Limit the number of anchors to keep UI responsive, but preserve the
+        # strongest extrema first so valleys are less likely to disappear.
+        max_controls = 120
+        if len(anchor_strengths) > max_controls:
+            protected = {0, count - 1}
+            ranked = sorted(
+                (idx for idx in anchor_strengths if idx not in protected),
+                key=lambda idx: (-anchor_strengths[idx], idx),
+            )
+            keep = set(ranked[: max(0, max_controls - len(protected))])
+            keep.update(protected)
+            self._ele_control_indices = sorted(keep)
+        else:
+            self._ele_control_indices = sorted(anchor_strengths)
 
     def set_elevation_edit_mode(self, enabled: bool):
         """Enable or disable elevation edit mode (editing directly on the chart)."""
@@ -334,17 +492,14 @@ class ChartWidget(QWidget):
 
                     # Use current global elevation range for y <-> ele mapping
                     ele_vals_all = [pt.get("ele", 0.0) for pt in self._gpx_data]
-                    min_ele_g, max_ele_g = min(ele_vals_all), max(ele_vals_all)
-                    if abs(max_ele_g - min_ele_g) < 0.1:
-                        max_ele_g += 0.1
-                        min_ele_g -= 0.1
+                    plot_min_ele, plot_max_ele = self._elevation_plot_range(ele_vals_all)
                     top_height = int(self._chart_height_top * h)
 
                     # invert y_for_ele for current mouse y
                     y = float(event.pos().y())
                     y_clamped = max(20.0, min(float(top_height), y))
                     frac = (top_height - y_clamped) / max(1e-6, (top_height - 20.0))
-                    new_ele = min_ele_g + frac * (max_ele_g - min_ele_g)
+                    new_ele = plot_min_ele + frac * (plot_max_ele - plot_min_ele)
 
                     seg_start = self._drag_seg_start
                     seg_end = self._drag_seg_end
@@ -576,19 +731,7 @@ class ChartWidget(QWidget):
         # makes sense. If all elevations are above 0, include 0 as
         # lower bound so the 0m-line is placed correctly below the
         # lowest data point (instead of coinciding with it).
-        plot_min_ele = min_ele
-        plot_max_ele = max_ele
-
-        # If the entire range is above 0, include 0 as lower bound.
-        if min_ele > 0.0:
-            plot_min_ele = 0.0
-        # If the entire range is below 0, include 0 as upper bound.
-        if max_ele < 0.0:
-            plot_max_ele = 0.0
-
-        if abs(plot_max_ele - plot_min_ele) < 0.1:
-            plot_max_ele = plot_max_ele + 0.1
-            plot_min_ele = plot_min_ele - 0.1
+        plot_min_ele, plot_max_ele = self._elevation_plot_range(ele_vals)
 
         if abs(max_spd - min_spd) < 0.1:
             max_spd += 0.1
@@ -643,7 +786,7 @@ class ChartWidget(QWidget):
             # control points as larger circles
             painter.setBrush(QBrush(QColor(255, 165, 0)))
             painter.setPen(QPen(QColor(0, 0, 0, 150), 1))
-            control_radius = 4
+            control_radius = self._ele_control_radius
             for idx in self._ele_control_indices:
                 if 0 <= idx < len(path_ele):
                     xx, yy = path_ele[idx]
@@ -1042,41 +1185,14 @@ class ChartWidget(QWidget):
             if self._elevation_edit_mode and self._ele_control_indices:
                 click_x = event.pos().x()
                 click_y = event.pos().y()
-                # Rebuild elevation path to know current positions
                 count = len(self._gpx_data)
                 if count >= 2:
-                    w = self.width()
-                    h = self.height()
-                    chart_width = w * self._zoom_factor
-                    ele_vals = [pt.get("ele", 0.0) for pt in self._gpx_data]
-                    min_ele, max_ele = min(ele_vals), max(ele_vals)
-                    if abs(max_ele - min_ele) < 0.1:
-                        max_ele += 0.1
-                        min_ele -= 0.1
-                    top_height = int(self._chart_height_top * h)
-
-                    def x_for_index(i: int) -> float:
-                        ratio = i / (count - 1)
-                        return ratio * chart_width - self._horizontal_offset
-
-                    def y_for_ele(e: float) -> float:
-                        frac = (e - min_ele) / (max_ele - min_ele)
-                        return top_height - (frac * (top_height - 20))
-
-                    # find nearest control point within a small radius
-                    nearest_idx = None
-                    nearest_dist_sq = (8 ** 2)  # pixels squared
-                    for idx in self._ele_control_indices:
-                        if 0 <= idx < count:
-                            xx = x_for_index(idx)
-                            yy = y_for_ele(ele_vals[idx])
-                            dx = xx - click_x
-                            dy = yy - click_y
-                            dist_sq = dx * dx + dy * dy
-                            if dist_sq <= nearest_dist_sq:
-                                nearest_dist_sq = dist_sq
-                                nearest_idx = idx
+                    nearest_idx = self._pick_elevation_control_point(click_x, click_y)
                     if nearest_idx is not None:
+                        # Keep chart selection, list selection, and drag target aligned.
+                        self._marker_index = nearest_idx
+                        self.update()
+                        self.markerClicked.emit(nearest_idx)
                         self._dragging_ele_idx = nearest_idx
                         # Precompute segment anchors for this drag (previous/next control)
                         try:
@@ -1088,13 +1204,8 @@ class ChartWidget(QWidget):
                             self._drag_seg_end = None
                             self._drag_orig_elevations = None
                         else:
-                            self._drag_prev_anchor = (
-                                self._ele_control_indices[pos - 1] if pos > 0 else None
-                            )
-                            self._drag_next_anchor = (
-                                self._ele_control_indices[pos + 1]
-                                if pos < len(self._ele_control_indices) - 1
-                                else None
+                            self._drag_prev_anchor, self._drag_next_anchor = (
+                                self._find_effective_drag_anchors(pos, nearest_idx)
                             )
                             # Determine affected segment [seg_start, seg_end] and cache original elevations
                             count = len(self._gpx_data)

@@ -4317,6 +4317,7 @@ class MainWindow(QMainWindow):
 
         # Push updated data into widgets/map/chart
         self.gpx_widget.set_gpx_data(self._gpx_data)
+        self.chart.refresh_after_elevation_edit(index)
         if self.mini_chart_widget:
             self.mini_chart_widget.set_gpx_data(self._gpx_data)
         self._update_gpx_overview()
