@@ -541,7 +541,7 @@ class GPXControlWidget(QWidget):
             mw.gpx_widget.gpx_list.clear_marked_range()
             mw.map_widget.clear_marked_range()
             
-            ### nur range in editor llschen wenn autocut is enabled
+            # Only clear the range in the editor when autocut is enabled.
             
             if hasattr(mw, "_autoSyncVideoEnabled") and mw._autoSyncVideoEnabled:
                 mw.cut_manager.on_markClear_clicked()        
@@ -796,7 +796,7 @@ class GPXControlWidget(QWidget):
         
         
             
-        ### nur range in editor llschen wenn autocut is enabled
+        # Only clear the range in the editor when autocut is enabled.
         
         if hasattr(mw, "_autoSyncVideoEnabled") and mw._autoSyncVideoEnabled:
             mw.cut_manager.on_markClear_clicked()
@@ -1470,7 +1470,7 @@ class GPXControlWidget(QWidget):
         # => e_idx bleibt t_end => identisch => also total_s bleibt 
         # => wir ändern NICHT time[e_idx], da offset_s=total_s an k = e_idx - b_idx
     
-        # 7) recalc
+        # 7) Recalculate derived GPX fields
         recalc_gpx_data(gpx_data)
         mw.gpx_widget.set_gpx_data(gpx_data)
         mw._gpx_data = gpx_data
@@ -1486,7 +1486,7 @@ class GPXControlWidget(QWidget):
         mw.gpx_widget.gpx_list.clear_marked_range()
         mw.map_widget.clear_marked_range()
             
-        ### nur range in editor llschen wenn autocut is enabled
+        # Only clear the range in the editor when autocut is enabled.
         if hasattr(mw, "_autoSyncVideoEnabled") and mw._autoSyncVideoEnabled:
             mw.cut_manager.on_markClear_clicked()
 
@@ -1951,7 +1951,7 @@ class GPXControlWidget(QWidget):
             mw.gpx_widget.gpx_list.clear_marked_range()
             mw.map_widget.clear_marked_range()
             
-            ### nur range in editor llschen wenn autocut is enabled
+            # Only clear the range in the editor when autocut is enabled.
             if hasattr(mw, "_autoSyncVideoEnabled") and mw._autoSyncVideoEnabled:
                 mw.cut_manager.on_markClear_clicked()    
             
@@ -2327,7 +2327,7 @@ class GPXControlWidget(QWidget):
                 
             mw.gpx_widget.gpx_list.clear_marked_range()
             mw.map_widget.clear_marked_range()
-            ### nur range in editor llschen wenn autocut is enabled
+            # Only clear the range in the editor when autocut is enabled.
             
             if hasattr(mw, "_autoSyncVideoEnabled") and mw._autoSyncVideoEnabled:
                 mw.cut_manager.on_markClear_clicked()
@@ -2483,7 +2483,7 @@ class GPXControlWidget(QWidget):
             mw.gpx_widget.gpx_list.clear_marked_range()
             mw.map_widget.clear_marked_range()
             
-            ### nur range in editor llschen wenn autocut is enabled
+            # Only clear the range in the editor when autocut is enabled.
             
             if hasattr(mw, "_autoSyncVideoEnabled") and mw._autoSyncVideoEnabled:
                 mw.cut_manager.on_markClear_clicked()
@@ -2620,7 +2620,7 @@ class GPXControlWidget(QWidget):
             mw.gpx_widget.gpx_list.clear_marked_range()
             mw.map_widget.clear_marked_range()
             
-            ### nur range in editor llschen wenn autocut is enabled
+            # Only clear the range in the editor when autocut is enabled.
             
             if hasattr(mw, "_autoSyncVideoEnabled") and mw._autoSyncVideoEnabled:
                 mw.cut_manager.on_markClear_clicked()
@@ -2949,7 +2949,7 @@ class GPXControlWidget(QWidget):
             if i < len(gpx_data):
                 gpx_data.pop(i)
 
-        # 5) recalc + updates
+        # 5) Recalculate derived GPX fields + updates
         recalc_gpx_data(gpx_data)
         mw.gpx_widget.set_gpx_data(gpx_data)
         mw._gpx_data = gpx_data
@@ -3007,7 +3007,7 @@ class GPXControlWidget(QWidget):
             hit_grey = True
     
     
-        # 1) Undo-Snapshot
+        # 1) Undo snapshot
         
         #old_data = copy.deepcopy(gpx_data)
         #mw.gpx_widget.gpx_list._history_stack.append(old_data)
@@ -3120,7 +3120,7 @@ class GPXControlWidget(QWidget):
         if e_idx < 0 or e_idx >= len(gpx_data):
             return
     
-        # 1) Undo-Snapshot
+        # 1) Undo snapshot
         
         #old_data = copy.deepcopy(gpx_data)
         #mw.gpx_widget.gpx_list._history_stack.append(old_data)
@@ -3179,24 +3179,24 @@ class GPXControlWidget(QWidget):
         
     def _close_gaps_local_interpolation(self, b_idx: int, e_idx: int, dt: float):
         """
-        Das ist dein alter Code, der zwischen b_idx und e_idx
-        lineare Punkte einfügt, damit jeder Schritt ~1s lang ist.
+        Legacy local interpolation that inserts linear points between
+        b_idx and e_idx so each step is about ~1 second long.
         """
         mw = self._mainwindow
         gpx_data = mw.gpx_widget.gpx_list._gpx_data
 
-        # 1) Undo-Snapshot
+        # 1) Undo snapshot
         
         #old_data = copy.deepcopy(gpx_data)
         #mw.gpx_widget.gpx_list._history_stack.append(old_data)
         self.register_gpx_undo_snapshot()
 
-        # 2) Koordinaten
+        # 2) Coordinates
         lat1, lon1, ele1 = gpx_data[b_idx]["lat"], gpx_data[b_idx]["lon"], gpx_data[b_idx]["ele"]
         lat2, lon2, ele2 = gpx_data[e_idx]["lat"], gpx_data[e_idx]["lon"], gpx_data[e_idx]["ele"]
         t1 = gpx_data[b_idx]["time"]
 
-        # 3) Wie bisher: Anzahl Intervalle = round(dt)
+        # 3) As before: number of intervals = round(dt)
         
         num_intervals = int(round(dt))
         if num_intervals < 2:
@@ -3223,12 +3223,12 @@ class GPXControlWidget(QWidget):
                 "gradient": 0.0
             }
             new_points.append(pt)
-
-        # 4) Einfügen
+        # 4) Insert points
         for i, p in enumerate(new_points):
             gpx_data.insert(b_idx + 1 + i, p)
+
     
-        # 5) recalc
+        # 5) Recalculate derived GPX fields
         
         recalc_gpx_data(gpx_data)
         mw.gpx_widget.set_gpx_data(gpx_data)
@@ -3244,7 +3244,7 @@ class GPXControlWidget(QWidget):
         mw.gpx_widget.gpx_list.clear_marked_range()
         mw.map_widget.clear_marked_range()
             
-        ### nur range in editor llschen wenn autocut is enabled
+        # Only clear the range in the editor when autocut is enabled.
         
         if hasattr(mw, "_autoSyncVideoEnabled") and mw._autoSyncVideoEnabled:
             mw.cut_manager.on_markClear_clicked()
@@ -3259,9 +3259,9 @@ class GPXControlWidget(QWidget):
     
     def _close_gaps_mapbox(self, b_idx: int, e_idx: int, dt: float, profile: str):
         """
-        Ruft die Mapbox Directions API auf (profil = 'driving','cycling','walking'),
-        berechnet time-based Densify in 1s-Schritten,
-        und ersetzt b_idx..e_idx im GPX durch die neue Route.
+        Calls the Mapbox Directions API (profile = 'driving', 'cycling', 'walking'),
+        computes time-based densification with equal-length time segments,
+        and replaces b_idx..e_idx in the GPX with the new route.
         """
         mw = self._mainwindow
         gpx_data = mw.gpx_widget.gpx_list._gpx_data
@@ -3270,7 +3270,7 @@ class GPXControlWidget(QWidget):
         #from PySide6.QtWidgets import QMessageBox
       
     
-        # 1) Undo-Snapshot
+        # 1) Undo snapshot
         #old_data = copy.deepcopy(gpx_data)
         #mw.gpx_widget.gpx_list._history_stack.append(old_data)
         self.register_gpx_undo_snapshot()
@@ -3329,7 +3329,7 @@ class GPXControlWidget(QWidget):
             self._close_gaps_local_interpolation(b_idx, e_idx, dt)
             return
 
-        # 5) Calculate distance: build segments, then distribute dt in 1s steps for time-based densify
+        # 5) Calculate distance: build segments, then distribute dt in equal-sized steps
         def haversine_m(latA, lonA, latB, lonB):
             import math
             R = 6371000
@@ -3377,24 +3377,18 @@ class GPXControlWidget(QWidget):
             # fallback
             return big_coords[-1]
 
-        # Now process 1-second steps along the route
-       
+        # Build evenly spaced points across the full dt so the last segment
+        # is not a shorter/longer remainder when dt contains decimals.
         new_points = []
         t_start = gpx_data[b_idx]["time"]
-        # final => gpx_data[e_idx]["time"] => dt sek
+        num_intervals = max(1, int(round(dt)))
+        sub_s = dt / num_intervals
 
-        speed_ms = total_dist/dt
-        # how many integer steps => floor(dt)
-        steps_count = int(math.floor(dt))
-        if steps_count<1:
-            steps_count=1
-
-        for i in range(steps_count+1):
-            dist_i = i*speed_ms
-            if dist_i>total_dist:
-                dist_i=total_dist
+        for i in range(num_intervals + 1):
+            frac = i / num_intervals
+            dist_i = total_dist * frac
             (lat_, lon_) = get_coord_at_dist(dist_i)
-            t_new = t_start + timedelta(seconds=i)
+            t_new = t_start + timedelta(seconds=sub_s * i)
             pt = {
                 "lat": lat_,
                 "lon": lon_,
@@ -3406,7 +3400,7 @@ class GPXControlWidget(QWidget):
             }
             new_points.append(pt)
 
-        # Letzter Punkt => exaktes E
+        # Last point => exact end point
         latE, lonE = gpx_data[e_idx]["lat"], gpx_data[e_idx]["lon"]
         new_points[-1]["lat"] = latE
         new_points[-1]["lon"] = lonE
@@ -3420,15 +3414,16 @@ class GPXControlWidget(QWidget):
         #     frac = i/total_count
         #     new_points[i]["ele"] = eleB + frac*(eleE-eleB)
 
-        # 6) b_idx+1.. e_idx entfernen
+        # 6) Remove b_idx+1 .. e_idx
         del gpx_data[b_idx+1 : e_idx+1]
 
-        mapbox_ele_update_list =[]
-        # Füge new_points[1..] ein (index=0 ist b_idx selbst)
+        mapbox_ele_update_list = []
+        # Insert new_points[1..] (index 0 is b_idx itself)
         for i, p in enumerate(new_points[1:], start=1):
             gpx_data.insert(b_idx + i, p)
             mapbox_ele_update_list.append((b_idx + i,p["lat"], p["lon"]))
-        # 7) recalc
+        # 7) Recalculate derived GPX fields
+
         mw.gpx_widget.set_gpx_data(gpx_data)
         self.update_elevation_from_opentopo(mapbox_ele_update_list)
 
@@ -3447,7 +3442,7 @@ class GPXControlWidget(QWidget):
         mw.gpx_widget.gpx_list.clear_marked_range()
         mw.map_widget.clear_marked_range()
             
-        ### nur range in editor llschen wenn autocut is enabled
+        # Only clear the range in the editor when autocut is enabled.
         
         if hasattr(mw, "_autoSyncVideoEnabled") and mw._autoSyncVideoEnabled:
             mw.cut_manager.on_markClear_clicked()        
