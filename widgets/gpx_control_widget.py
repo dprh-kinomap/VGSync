@@ -214,8 +214,8 @@ class GPXControlWidget(QWidget):
         
         
         
-        action_get_ele_mapbox = self.more_menu.addAction("GetElevation from OpenTopoData")
-        action_get_ele_mapbox.triggered.connect(self._on_get_ele_mapbox)
+        action_get_ele_opentopo = self.more_menu.addAction("GetElevation from OpenTopoData")
+        action_get_ele_opentopo.triggered.connect(self._on_get_ele_opentopo)
 
         
         action_set_height_b2e = self.more_menu.addAction("setHeight(B2E)")
@@ -711,7 +711,7 @@ class GPXControlWidget(QWidget):
         return (successful_points, request_count)
 
     ###
-    def _on_get_ele_mapbox(self):
+    def _on_get_ele_opentopo(self):
         mw = self._mainwindow
         if not mw:
             return
@@ -725,8 +725,11 @@ class GPXControlWidget(QWidget):
         e_idx = mw.gpx_widget.gpx_list._markE_idx
 
         if b_idx is None and e_idx is None:
-            QMessageBox.warning(self, "No Selection", "Please mark a GPX range or a single point with markB.")
-            return
+            current_row = mw.gpx_widget.gpx_list.table.currentRow()
+            if not (0 <= current_row < len(gpx_data)):
+                QMessageBox.warning(self, "No Selection", "Please select a GPX point or mark a GPX range.")
+                return
+            b_idx = current_row
 
         if b_idx is not None and e_idx is None:
             # Nur ein Punkt (markB) ausgewählt
@@ -754,14 +757,14 @@ class GPXControlWidget(QWidget):
             if b_idx > e_idx:
                 b_idx, e_idx = e_idx, b_idx
 
-            if e_idx - b_idx < 1:
-                QMessageBox.information(self, "Invalid Range", "At least 2 points needed in B..E range.")
+            if not (0 <= b_idx < len(gpx_data)) or not (0 <= e_idx < len(gpx_data)):
+                QMessageBox.warning(self, "Invalid Range", "Marked range is outside the GPX data.")
                 return
 
             reply = QMessageBox.question(
                 self,
                 "Get Elevation from OpenTopoData",
-                f"This will fetch elevation data from OpenTopoData for the selected GPX range {b_idx} to {e_idx}.\nDo you want to proceed?",
+                f"This will fetch elevation data from OpenTopoData for the selected GPX point(s) {b_idx} to {e_idx}.\nDo you want to proceed?",
                 QMessageBox.Yes | QMessageBox.No
             )
             if reply != QMessageBox.Yes:
@@ -774,8 +777,7 @@ class GPXControlWidget(QWidget):
 
         #if tile_count == 0:
         if tile_count == 0 and successful_points == 0:
-            #QMessageBox.warning(self, "Mapbox Error", "No elevation tiles could be loaded.\nCheck your Mapbox API key.")
-            print("[INFO] No elevation loaded – possibly due to missing Mapbox key")
+            print("[INFO] No elevation loaded from OpenTopoData")
             return
         if successful_points == 0:
             QMessageBox.warning(self, "No Elevation Found", "Tiles were loaded, but no elevation values could be decoded.")
@@ -3417,15 +3419,15 @@ class GPXControlWidget(QWidget):
         # 6) Remove b_idx+1 .. e_idx
         del gpx_data[b_idx+1 : e_idx+1]
 
-        mapbox_ele_update_list = []
+        opentopo_ele_update_list = []
         # Insert new_points[1..] (index 0 is b_idx itself)
         for i, p in enumerate(new_points[1:], start=1):
             gpx_data.insert(b_idx + i, p)
-            mapbox_ele_update_list.append((b_idx + i,p["lat"], p["lon"]))
+            opentopo_ele_update_list.append((b_idx + i, p["lat"], p["lon"]))
         # 7) Recalculate derived GPX fields
 
         mw.gpx_widget.set_gpx_data(gpx_data)
-        self.update_elevation_from_opentopo(mapbox_ele_update_list)
+        self.update_elevation_from_opentopo(opentopo_ele_update_list)
 
         recalc_gpx_data(gpx_data)
         mw.gpx_widget.set_gpx_data(gpx_data)
