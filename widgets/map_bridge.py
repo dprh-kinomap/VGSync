@@ -29,6 +29,7 @@ class MapBridge(QObject):
     syncClickedNoArg = Signal()   # <-- Neue Signal-Variante ohne Parameter
     newPointInsertedSignal = Signal(float, float, int)
     mapboxProfileChangedSignal = Signal(str)  
+    searchLocationRequestedSignal = Signal()
     
         
     def __init__(self, parent=None):
@@ -74,6 +75,13 @@ class MapBridge(QObject):
         # (Optional: Hier kannst du auch print("JS rief syncNoArgSlot auf!") machen)    
         
     
+    @Slot()
+    def searchLocation(self):
+        """
+        Called from the map HTML when the location search button is pressed.
+        """
+        self.searchLocationRequestedSignal.emit()
+
     @Slot(float, float, int)
     def newPointInserted(self, lat, lon, idx):
         """

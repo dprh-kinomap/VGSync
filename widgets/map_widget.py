@@ -110,6 +110,7 @@ class MapWidget(QWidget):
         self._bridge.syncClickedNoArg.connect(self._on_sync_noarg_from_js)
         self._bridge.newPointInsertedSignal.connect(self._on_new_point_inserted)
         self._bridge.mapboxProfileChangedSignal.connect(self._on_mapbox_profile_changed)
+        self._bridge.searchLocationRequestedSignal.connect(self._on_search_location_requested)
 
         # --- Drag&Drop: GPX/FIT auf die Karte ---
         self.setAcceptDrops(True)
@@ -185,6 +186,11 @@ class MapWidget(QWidget):
         """
         if self._mainwindow and hasattr(self._mainwindow, "on_map_sync_any"):
             self._mainwindow.on_map_sync_any()
+
+    @Slot()
+    def _on_search_location_requested(self):
+        if self._mainwindow and hasattr(self._mainwindow, "_on_search_location_triggered"):
+            self._mainwindow._on_search_location_triggered()
 
     def on_point_moved(self, index: int, lat: float, lon: float):
         """

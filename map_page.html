@@ -60,6 +60,18 @@
       cursor: pointer;
       font-size: 0.9rem;
     }
+    #btnSearchLocation {
+      position: absolute;
+      bottom: 45px;
+      left: 10px;
+      z-index: 9999;
+      opacity: 0.85;
+      background-color: #eee;
+      border: 1px solid #777;
+      padding: 4px 8px;
+      cursor: pointer;
+      font-size: 0.9rem;
+    }
     #moveBtn {
       position: absolute;
       top: 10px;
@@ -282,6 +294,7 @@
   
       <!-- Buttons go here -->
       <button id="mapViewBtn" class="custom-map-btn">OSM</button>
+      <button id="btnSearchLocation" class="custom-map-btn" title="Search location">Search</button>
       <button id="btnSyncNoArg" class="custom-map-btn" title="Sync video with selected point">V-Sync</button>
       <button id="moveBtn" class="custom-map-btn" title="Edit point coordinates">Move</button>
       <button id="btnNewPoint" class="custom-map-btn">
@@ -615,6 +628,15 @@
       let mvBtn = document.getElementById("mapViewBtn");
       if(mvBtn){
         mvBtn.addEventListener("click", cycleMapMode);
+      }
+
+      let searchB = document.getElementById("btnSearchLocation");
+      if(searchB){
+        searchB.addEventListener("click", ()=>{
+          if(channelObj && channelObj.searchLocation){
+            channelObj.searchLocation();
+          }
+        });
       }
 
       let moveB= document.getElementById("moveBtn");

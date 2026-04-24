@@ -885,16 +885,12 @@ class MainWindow(QMainWindow):
         self.action_map_directions.setCheckable(True)
         self.action_map_directions.setChecked(False)  # standard: aus
         
-        self.action_search_location = QAction("Search location...", self)
-        self.action_search_location.setStatusTip("Search a place by name using OpenStreetMap/Nominatim")
 
         # 3) Ins Menü einfügen
         map_setup_menu.addAction(self.action_map_directions)
-        map_setup_menu.addAction(self.action_search_location)
 
         # 4) Signal verknüpfen
         self.action_map_directions.triggered.connect(self._on_map_directions_toggled)
-        self.action_search_location.triggered.connect(self._on_search_location_triggered)
         
         mapviews_menu = map_setup_menu.addMenu("Map Keys")
         
