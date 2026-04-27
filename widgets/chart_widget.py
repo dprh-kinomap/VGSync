@@ -228,10 +228,12 @@ class ChartWidget(QWidget):
         plot_min_ele = min_ele
         plot_max_ele = max_ele
 
-        if min_ele > 0.0:
-            plot_min_ele = 0.0
-        if max_ele < 0.0:
-            plot_max_ele = 0.0
+        # Add 20% headroom on each side for better scaling
+        ele_range = max_ele - min_ele
+        if ele_range > 0:
+            headroom = ele_range * 0.2
+            plot_min_ele = min_ele - headroom
+            plot_max_ele = max_ele + headroom
 
         if abs(plot_max_ele - plot_min_ele) < 0.1:
             plot_max_ele += 0.1
@@ -812,25 +814,28 @@ class ChartWidget(QWidget):
         if plot_min_ele <= 0.0 <= plot_max_ele:
             zero_y = y_for_ele(0.0)
             pen = QPen(QColor(255, 80, 80), 1, Qt.DashLine)
+            label = "0 m"
         elif has_only_above:
             # all data above zero -> subtle line at bottom of elevation plot
             zero_y = int(top_height) - 1
             pen = QPen(QColor(140, 140, 140), 1, Qt.DashLine)
+            label = f"{int(min_ele)} m"
         else:
             # all data below zero -> subtle line at top of elevation plot
             zero_y = 20
             pen = QPen(QColor(140, 140, 140), 1, Qt.DashLine)
+            label = f"{int(max_ele)} m"
 
         painter.setPen(pen)
         painter.drawLine(0, zero_y, w, zero_y)
 
-        # Label "0 m" nahe der Linie
+        # Label the line with the correct elevation
         try:
             lab_font = QFont(self.font().family(), max(4, int(h * 0.025)))
             painter.setFont(lab_font)
         except Exception:
             pass
-        painter.drawText(4, int(zero_y) - 2, "0 m")
+        painter.drawText(4, int(zero_y) - 2, label)
         # -------------------------------------------------------------------------
 
         # ------------------------------------------------------------------------
