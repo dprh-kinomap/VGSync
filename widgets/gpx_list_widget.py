@@ -504,42 +504,53 @@ class GPXListWidget(QWidget):
         self._original_value = None
 
         match column:
-            case 0: 
-                 # Parse relative time and update GPX datetime
-                base_dt = self._gpx_data[0].get("time") - timedelta(seconds=get_gpx_video_shift())
-                if base_dt is None:
-                    return  # Can't apply relative update
-
-                try:
-                    rel_s = self._parse_hhmmss_milli(value)
-                    new_dt = base_dt + timedelta(seconds=rel_s) 
-                    next_dt = self._get_time_of_row(row + 1)  
-                    print(f"[DEBUG] Setting new time for row {row}: {new_dt} (base={base_dt}, rel_s={rel_s})")
-
-                    if next_dt and new_dt >= next_dt:
-                        from PySide6.QtWidgets import QMessageBox
-                        QMessageBox.warning(
-                            self.table,  # parent widget
-                            "Invalid Range",
-                            "New time must be earlier than the next time"
-                        )
-                        self.set_gpx_data(self._gpx_data) # Reset to original value
+            case 0:
+                # If editing the first row, update gpx_video_shift instead of GPX data
+                if row == 0:
+                    base_dt = self._gpx_data[0].get("time") - timedelta(seconds=get_gpx_video_shift())
+                    if base_dt is None:
                         return
-                    prev_dt = self._get_time_of_row(row -1) 
-
-                    if prev_dt and new_dt <= prev_dt:
-                        from PySide6.QtWidgets import QMessageBox
-                        QMessageBox.warning(
-                            self.table,  # parent widget
-                            "Invalid Range",
-                            f"New time must be later than the previous time"
-                        )
-                        self.set_gpx_data(self._gpx_data) # Reset to original value
-                        return
-                    
-                    self._gpx_data[row]["time"] = new_dt
-                except Exception as e:
-                    print(f"Invalid time format in row {row}: {value} ({e})")
+                    try:
+                        rel_s = self._parse_hhmmss_milli(value)
+                        new_dt = base_dt + timedelta(seconds=rel_s)
+                        old_dt = self._gpx_data[0]["time"]
+                        delta = (new_dt - old_dt).total_seconds()
+                        from core.gpx_parser import set_gpx_video_shift, get_gpx_video_shift
+                        set_gpx_video_shift(get_gpx_video_shift() - delta)
+                        print(f"[DEBUG] Updated gpx_video_shift by {-delta} seconds (new shift: {get_gpx_video_shift()})")
+                    except Exception as e:
+                        print(f"Invalid time format in row {row}: {value} ({e})")
+                else:
+                    base_dt = self._gpx_data[0].get("time") - timedelta(seconds=get_gpx_video_shift())
+                    if base_dt is None:
+                        return  # Can't apply relative update
+                    try:
+                        rel_s = self._parse_hhmmss_milli(value)
+                        new_dt = base_dt + timedelta(seconds=rel_s)
+                        next_dt = self._get_time_of_row(row + 1)
+                        print(f"[DEBUG] Setting new time for row {row}: {new_dt} (base={base_dt}, rel_s={rel_s})")
+                        if next_dt and new_dt >= next_dt:
+                            from PySide6.QtWidgets import QMessageBox
+                            QMessageBox.warning(
+                                self.table,  # parent widget
+                                "Invalid Range",
+                                "New time must be earlier than the next time"
+                            )
+                            self.set_gpx_data(self._gpx_data) # Reset to original value
+                            return
+                        prev_dt = self._get_time_of_row(row -1)
+                        if prev_dt and new_dt <= prev_dt:
+                            from PySide6.QtWidgets import QMessageBox
+                            QMessageBox.warning(
+                                self.table,  # parent widget
+                                "Invalid Range",
+                                f"New time must be later than the previous time"
+                            )
+                            self.set_gpx_data(self._gpx_data) # Reset to original value
+                            return
+                        self._gpx_data[row]["time"] = new_dt
+                    except Exception as e:
+                        print(f"Invalid time format in row {row}: {value} ({e})")
 
         from core.gpx_parser import recalc_gpx_data
         recalc_gpx_data(self._gpx_data)

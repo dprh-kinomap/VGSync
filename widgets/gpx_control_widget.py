@@ -2084,13 +2084,13 @@ class GPXControlWidget(QWidget):
         # --- CASE A: Einzelpunkt ---
         if not valid_range:
             row = mw.gpx_widget.gpx_list.table.currentRow()
-    
+
             if row < 0 or row >= n:
                 QMessageBox.warning(self, "Invalid Selection", "Please select a valid GPX point.")
                 return
-            ######
+
             if row == 0:
-                # --- Neuer Sonderfall: GPX[0] erlaubt negativen Delta ---
+                # --- Use gpx_video_shift instead of shifting GPX data ---
                 self.register_gpx_undo_snapshot()
 
                 t0 = gpx_data[0].get("time", None)
@@ -2107,12 +2107,13 @@ class GPXControlWidget(QWidget):
                 lbl = QLabel(
                     f"You are changing the time distance between GPX[0] and GPX[1].\n"
                     f"Current difference: {old_diff:.3f} s\n\n"
-                    "Enter a **negative** shift (e.g. -10.0) to delay all points after GPX[0]:"
+                    "Enter a **negative** shift (e.g. -1.0) to move the first point earlier, or positive to move it later.\n"
+                    "This will update the video/GPX offset instead of shifting GPX data."
                 )
                 vbox.addWidget(lbl)
-    
+
                 spin = QDoubleSpinBox()
-                spin.setRange(-99999.0, -0.001)
+                spin.setRange(-99999.0, 99999.0)
                 spin.setDecimals(3)
                 spin.setSingleStep(0.001)
                 spin.setValue(-1.0)
@@ -2131,33 +2132,28 @@ class GPXControlWidget(QWidget):
                 if not dlg.exec():
                     return
 
-                shift_val = spin.value()  # z. B. -10.0
+                shift_val = spin.value()  # e.g. -1.0
 
-                # Alle Punkte ab Index 1 verschieben um +abs(shift_val)
-                for j in range(1, n):
-                    gpx_data[j]["time"] += timedelta(seconds=abs(shift_val))
+                # Update gpx_video_shift: negative shift moves first point earlier (subtract from shift)
+                set_gpx_video_shift(get_gpx_video_shift() + shift_val)
+                print(f"[DEBUG] Updated gpx_video_shift by {shift_val} seconds (new shift: {get_gpx_video_shift()})")
 
-                recalc_gpx_data(gpx_data)
                 mw.gpx_widget.set_gpx_data(gpx_data)
-                mw._gpx_data = gpx_data
                 mw._update_gpx_overview()
                 mw.chart.set_gpx_data(gpx_data)
                 if mw.mini_chart_widget:
                     mw.mini_chart_widget.set_gpx_data(gpx_data)
-    
-    
+
                 if hasattr(mw, "_autoSyncVideoEnabled") and mw._autoSyncVideoEnabled:
-                    mw.cut_manager.on_markClear_clicked()       
-                    
+                    mw.cut_manager.on_markClear_clicked()
+
                 QMessageBox.information(
                     self, "Done",
-                    f"All GPX points after index 0 have been shifted by {abs(shift_val):.3f} seconds."
-                )   
-                
-                
+                    f"Video/GPX offset updated by {shift_val:+.3f} seconds.\n"
+                    f"New offset: {get_gpx_video_shift():.3f} s"
+                )
+                return
 
-            ###
-            
             # --- Normalfall (row >= 1) ---
             if row < 1:
                 QMessageBox.warning(self, "Invalid Selection",
@@ -2165,66 +2161,66 @@ class GPXControlWidget(QWidget):
                 return
 
             self.register_gpx_undo_snapshot()
-    
+
             t_prev = gpx_data[row - 1].get("time", None)
             t_curr = gpx_data[row].get("time", None)
             if not t_prev or not t_curr:
                 QMessageBox.warning(self, "Missing Time",
                     f"Point {row-1} or {row} has no 'time' set.")
                 return
-    
+
             old_diff_s = (t_curr - t_prev).total_seconds()
             if old_diff_s < 0:
                 QMessageBox.warning(self, "Unsorted Track", "time[row] < time[row-1]? The track seems unsorted.")
                 return
-    
+
             dlg = QDialog(self)
             dlg.setWindowTitle("Change Step - Single Point")
             vbox = QVBoxLayout(dlg)
-    
+
             info_lbl = QLabel(
                 f"Current step = {old_diff_s:.3f} seconds.\n"
                 "Please enter a new step (>= 0.001)."
             )
             vbox.addWidget(info_lbl)
-    
+
             spin_new_step = QDoubleSpinBox()
             spin_new_step.setRange(0.001, 999999.0)
             spin_new_step.setValue(old_diff_s)
             spin_new_step.setDecimals(3)
             spin_new_step.setSingleStep(0.001)
             vbox.addWidget(spin_new_step)
-    
+
             btn_box = QHBoxLayout()
             btn_ok = QPushButton("OK")
             btn_cancel = QPushButton("Cancel")
             btn_box.addWidget(btn_ok)
             btn_box.addWidget(btn_cancel)
             vbox.addLayout(btn_box)
-    
+
             def on_ok():
                 new_val = spin_new_step.value()
                 if new_val < 0.001:
                     QMessageBox.warning(dlg, "Invalid Value", "New step cannot be < 0.001!")
                     return
                 dlg.accept()
-    
+
             def on_cancel():
                 dlg.reject()
-    
+
             btn_ok.clicked.connect(on_ok)
             btn_cancel.clicked.connect(on_cancel)
-    
+
             if not dlg.exec():
                 return
-    
+
             new_step_s = spin_new_step.value()
             delta_s = new_step_s - old_diff_s
-    
+
             for j in range(row, n):
                 t_old = gpx_data[j]["time"]
                 gpx_data[j]["time"] = t_old + timedelta(seconds=delta_s)
-    
+
             recalc_gpx_data(gpx_data)
             mw.gpx_widget.set_gpx_data(gpx_data)
             mw._gpx_data = gpx_data
