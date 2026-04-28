@@ -500,6 +500,7 @@ class MainWindow(QMainWindow):
         self._bing_key     = ""
         self._mapbox_key   = ""
         self._mapillary_key   = ""
+        self._google_maps_key = ""
         
         self._load_map_keys_from_settings()
         
@@ -915,6 +916,11 @@ class MainWindow(QMainWindow):
         action_set_mapillary_key = QAction("Set Mapillary Key...", self)
         action_set_mapillary_key.triggered.connect(self._on_set_mapillary_key)
         mapviews_menu.addAction(action_set_mapillary_key)
+
+        # --> Set Google Maps Key
+        action_set_google_maps_key = QAction("Set Google Maps Key...", self)
+        action_set_google_maps_key.triggered.connect(self._on_set_google_maps_key)
+        mapviews_menu.addAction(action_set_google_maps_key)
         
         self.action_new_pts_video_time = QAction("Sync all with video", self)
         self.action_new_pts_video_time.setStatusTip("If activates we automatically sync the video to a select gpx point without using V-Sync-Button")
@@ -1749,11 +1755,20 @@ class MainWindow(QMainWindow):
         enc_bi = s.value("bing/key", "", str)
         enc_mb = s.value("mapbox/key", "", str)
         enc_ma = s.value("mapillary/key", "", str)
+        enc_gg = s.value("googleMaps/key", "", str)
 
         self._maptiler_key = decode(enc_mt)
         self._bing_key     = decode(enc_bi)
         self._mapbox_key   = decode(enc_mb)
         self._mapillary_key   = decode(enc_ma)
+        self._google_maps_key = decode(enc_gg)
+
+        # Fallback to environment variables when QSettings do not contain keys.
+        self._maptiler_key = self._maptiler_key or os.environ.get("KVR_MAPTILER_KEY", "")
+        self._bing_key = self._bing_key or os.environ.get("KVR_BING_KEY", "")
+        self._mapbox_key = self._mapbox_key or os.environ.get("KVR_MAPBOX_KEY", "")
+        self._mapillary_key = self._mapillary_key or os.environ.get("KVR_MAPILLARY_KEY", "")
+        self._google_maps_key = self._google_maps_key or os.environ.get("KVR_GOOGLE_MAPS_KEY", "")
     
     def _save_map_key_to_settings(self, provider: str, plain_key: str):
         """
@@ -1774,6 +1789,9 @@ class MainWindow(QMainWindow):
         elif provider == "mapillary":
             s.setValue("mapillary/key", enc)
             self._mapillary_key = plain_key
+        elif provider == "googleMaps":
+            s.setValue("googleMaps/key", enc)
+            self._google_maps_key = plain_key
 
         # Jetzt sofort updaten => an map_page.html schicken
         self._update_map_page_keys()    
@@ -1799,6 +1817,7 @@ class MainWindow(QMainWindow):
 
         if self._mapillary_key:
             page.runJavaScript(f"setMapillaryKey('{self._mapillary_key}')")   
+        page.runJavaScript(f"setGoogleMapsKey('{self._google_maps_key}')")
 
 
     def _on_set_maptiler_key(self):
@@ -1809,6 +1828,9 @@ class MainWindow(QMainWindow):
 
     def _on_set_mapillary_key(self):
         self._show_key_dialog("mapillary", self._mapillary_key)
+
+    def _on_set_google_maps_key(self):
+        self._show_key_dialog("googleMaps", self._google_maps_key)
 
     def _show_key_dialog(self, provider_name: str, current_val: str):
         """
@@ -1855,12 +1877,13 @@ class MainWindow(QMainWindow):
         msg.setText(
             "<h3>Information about Map Keys</h3>"
             "<p>You can use different satellite tile providers. "
-            "Enter your own API keys for MapTiler or Mapbox. "
+            "Enter your own API keys for MapTiler, Mapbox, Mapillary or Google Maps. "
             "Each provider has its own usage limits and Terms of Service.</p>"
             "<ul>"
             "<li><b>MapTiler:</b> <a href='https://www.maptiler.com/'>maptiler.com</a></li>"
             "<li><b>Mapbox:</b> <a href='https://www.mapbox.com/'>mapbox.com</a></li>"
             "<li><b>Mapillary:</b> <a href='https://www.mapillary.com/dashboard/developers'>mapillary.com</a></li>"
+            "<li><b>Google Maps:</b> <a href='https://developers.google.com/maps/documentation'>developers.google.com/maps</a></li>"
             "</ul>"
             "<p>Please ensure you comply with each provider's usage policies.</p>"
         )

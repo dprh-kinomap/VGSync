@@ -22,6 +22,7 @@ import os
 import sys
 import shutil
 import platform
+from env_loader import load_dotenv
 
 
 
@@ -138,6 +139,7 @@ if current_os == "Darwin":
 # ++ADD++ Ende Mac-Patch
 
 base_dir = os.path.dirname(os.path.abspath(__file__))
+load_dotenv(os.path.join(base_dir, ".env"))
 
 ## das ist für die map:
 os.environ["QSG_RHI_BACKEND"] = "opengl"
