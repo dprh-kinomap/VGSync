@@ -151,7 +151,7 @@ def copy_only_pdfs(src_dir, dst_dir):
                 print("[COPY PDF]", sfile, "->", dfile)
                 shutil.copy2(sfile, dfile)            
 
-def build_windows(build_setup: bool = False):
+def build_windows(build_setup: bool = False, onefile: bool = False, bundle_env: bool = False, pyinstaller_key: str = ""):
     license_path = ensure_license_txt()
     app_version = load_app_version()
     print(f"[INFO] APP_VERSION: {app_version}")
@@ -170,26 +170,35 @@ def build_windows(build_setup: bool = False):
         print("[WARN] icon_icon.ico nicht gefunden – PyInstaller nutzt Default-Icon.")
 
     # ---------------- PyInstaller -----------------
-    # WICHTIG: --distpath = artifacts_root → erzeugt <artifacts_root>\KVRTmp
-    print("[INFO] Starte PyInstaller (onedir) → Ziel:", artifacts_root)
+    print("[INFO] Starte PyInstaller (onefile) → Ziel:" if onefile else "[INFO] Starte PyInstaller (onedir) → Ziel:", artifacts_root)
     cmd = [
         sys.executable, "-m", "PyInstaller",
         "--noconfirm",
-        "--onedir",
+    ]
+    cmd.append("--onefile" if onefile else "--onedir")
+    if pyinstaller_key:
+        cmd.extend(["--key", pyinstaller_key])
+    cmd.extend([
         f"--name={exe_name_tmp}",
         f"--distpath={artifacts_root}",
         f"--icon={icon_file}" if os.path.isfile(icon_file) else "",
-        main_script
-    ]
+    ])
+    if bundle_env:
+        env_file = os.path.join(BASE_DIR, ".env")
+        if os.path.isfile(env_file):
+            cmd.extend(["--add-data", env_file + ";."])
+        else:
+            print("[WARN] .env file not found, cannot bundle environment variables.")
+    cmd.append(main_script)
     # leere Strings aus cmd entfernen
     cmd = [c for c in cmd if c]
     run_cmd(cmd)
 
     # ---------------- Nachbearbeitung -------------
-    pyi_out_dir = os.path.join(artifacts_root, exe_name_tmp)               # dist/KVRouite_<ver>/KVRTmp
-    exe_path    = os.path.join(pyi_out_dir, f"{exe_name_tmp}.exe")
+    pyi_out_dir = None if onefile else os.path.join(artifacts_root, exe_name_tmp)
+    exe_path    = os.path.join(artifacts_root, f"{exe_name_tmp}.exe") if onefile else os.path.join(pyi_out_dir, f"{exe_name_tmp}.exe")
     if not os.path.isfile(exe_path):
-        raise RuntimeError(f"[ERROR] {exe_name_tmp}.exe fehlt in {pyi_out_dir} – PyInstaller-Build fehlgeschlagen.")
+        raise RuntimeError(f"[ERROR] {exe_name_tmp}.exe fehlt in {artifacts_root if onefile else pyi_out_dir} – PyInstaller-Build fehlgeschlagen.")
 
     target_dirname = f"KVRouite_{app_version}"
     target_dir     = os.path.join(artifacts_root, target_dirname)          # dist/KVRouite_<ver>/KVRouite_<ver>
@@ -200,17 +209,20 @@ def build_windows(build_setup: bool = False):
     print(f"[MOVE] {exe_path} -> {new_exe_path}")
     shutil.move(exe_path, new_exe_path)
 
-    # Rest aus PyInstaller-Ordner nach target_dir kopieren
-    print(f"[INFO] Kopiere PyInstaller-Output nach {target_dir} …")
-    for item in os.listdir(pyi_out_dir):
-        src_item = os.path.join(pyi_out_dir, item)
-        dst_item = os.path.join(target_dir, item)
-        if item.lower() == f"{exe_name_tmp}.exe":
-            continue  # EXE bereits verschoben
-        if os.path.isdir(src_item):
-            shutil.copytree(src_item, dst_item, dirs_exist_ok=True)
-        else:
-            shutil.copy2(src_item, dst_item)
+    if not onefile:
+        # Rest aus PyInstaller-Ordner nach target_dir kopieren
+        print(f"[INFO] Kopiere PyInstaller-Output nach {target_dir} …")
+        for item in os.listdir(pyi_out_dir):
+            src_item = os.path.join(pyi_out_dir, item)
+            dst_item = os.path.join(target_dir, item)
+            if item.lower() == f"{exe_name_tmp}.exe":
+                continue  # EXE bereits verschoben
+            if os.path.isdir(src_item):
+                shutil.copytree(src_item, dst_item, dirs_exist_ok=True)
+            else:
+                shutil.copy2(src_item, dst_item)
+    else:
+        print(f"[INFO] Onefile build complete; no extra dist folder copied to {target_dir}.")
 
     # _internal vorbereiten + ffmpeg/mpv hinein
     internal_dir = os.path.join(target_dir, "_internal")
@@ -366,11 +378,12 @@ def build_windows(build_setup: bool = False):
             write_sha256(installer_path)
         else:
             print("[WARN] Installer nicht gefunden (erwartet):", installer_path)
-    try:
-        print("[CLEAN] Entferne temporären PyInstaller-Ordner:", os.path.abspath(pyi_out_dir))
-        shutil.rmtree(pyi_out_dir, ignore_errors=True)
-    except Exception as e:
-        print("[WARN] Konnte Temp-Ordner nicht entfernen:", e)
+    if pyi_out_dir is not None:
+        try:
+            print("[CLEAN] Entferne temporären PyInstaller-Ordner:", os.path.abspath(pyi_out_dir))
+            shutil.rmtree(pyi_out_dir, ignore_errors=True)
+        except Exception as e:
+            print("[WARN] Konnte Temp-Ordner nicht entfernen:", e)
     print()
     print(f"[INFO] Fertig. Alles liegt in: {os.path.abspath(artifacts_root)}")
     print(f"[INFO] - Ordner: {target_dirname}\\")
@@ -385,11 +398,19 @@ def main():
     import argparse
     p = argparse.ArgumentParser()
     p.add_argument("--build-installer", action="store_true", help="Build Windows installer via Inno Setup")
+    p.add_argument("--onefile", action="store_true", help="Build a single-file PyInstaller executable")
+    p.add_argument("--bundle-env", action="store_true", help="Include .env inside the PyInstaller bundle")
+    p.add_argument("--pyinstaller-key", default="", help="Optional PyInstaller key to encrypt bytecode")
     args = p.parse_args()
     if platform.system() != "Windows":
         print("[WARN] Only Windows supported here.")
         sys.exit(1)
-    build_windows(build_setup=args.build_installer)
+    build_windows(
+        build_setup=args.build_installer,
+        onefile=args.onefile,
+        bundle_env=args.bundle_env,
+        pyinstaller_key=args.pyinstaller_key,
+    )
 
 if __name__ == "__main__":
     main()
