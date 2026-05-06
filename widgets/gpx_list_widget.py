@@ -832,7 +832,7 @@ class GPXListWidget(QWidget):
         return paths
 
     def _is_track(self, path: str) -> bool:
-        return path.lower().endswith((".gpx", ".fit"))
+        return path.lower().endswith((".gpx", ".fit", ".json"))
 
     def resizeEvent(self, e):
         super().resizeEvent(e)

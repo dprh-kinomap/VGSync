@@ -221,6 +221,27 @@
       opacity: 1;
     }
 
+    .map-context-menu {
+      position: absolute;
+      z-index: 10002;
+      background: #ffffff;
+      border: 1px solid #888;
+      border-radius: 4px;
+      box-shadow: 0 3px 12px rgba(0, 0, 0, 0.25);
+      padding: 4px 0;
+      min-width: 200px;
+      display: none;
+      font-size: 0.95rem;
+    }
+    .map-context-menu__item {
+      padding: 8px 12px;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    .map-context-menu__item:hover {
+      background: #f0f0f0;
+    }
+
     #mapillaryViewer {
       height: 0; /* will be set dynamically */
       overflow: hidden;
@@ -346,6 +367,10 @@
   <div id="splitContainer">
     <div id="mapContainer">
       <div id="map"></div>
+      <div id="mapContextMenu" class="map-context-menu">
+        <div class="map-context-menu__item" id="ctxDeleteShift">Delete point and shift next points</div>
+        <div class="map-context-menu__item" id="ctxDeleteNoShift">Delete point without shift</div>
+      </div>
   
       <!-- Buttons go here -->
       <button id="mapViewBtn" class="custom-map-btn">OSM</button>
@@ -941,7 +966,85 @@
         }
       });
 
+      map.getViewport().addEventListener("contextmenu", function(domEvt){
+        let featureIndex = null;
+        let pixel = map.getEventPixel(domEvt);
+        map.forEachFeatureAtPixel(pixel, function(feature){
+          let geom = feature.getGeometry();
+          if(geom && geom.getType() === "Point"){
+            let idx = feature.get("index");
+            if(idx !== undefined && idx !== null){
+              featureIndex = idx;
+              return true;
+            }
+          }
+          return false;
+        });
+
+        if(featureIndex !== null){
+          domEvt.preventDefault();
+          showMapContextMenu(domEvt.clientX, domEvt.clientY, featureIndex);
+        } else {
+          hideMapContextMenu();
+        }
+      });
+
     }
+
+    function showMapContextMenu(x, y, index){
+      const menu = document.getElementById("mapContextMenu");
+      if(!menu) return;
+      menu.dataset.index = index;
+      menu.style.left = x + "px";
+      menu.style.top = y + "px";
+      menu.style.display = "block";
+    }
+
+    function hideMapContextMenu(){
+      const menu = document.getElementById("mapContextMenu");
+      if(menu){
+        menu.style.display = "none";
+      }
+    }
+
+    function deletePointFromContextMenu(shiftNext){
+      const menu = document.getElementById("mapContextMenu");
+      if(!menu) return;
+      const idx = parseInt(menu.dataset.index, 10);
+      if(isNaN(idx)) return;
+      hideMapContextMenu();
+      if(channelObj && channelObj.deletePoint){
+        channelObj.deletePoint(idx, shiftNext);
+      } else {
+        console.warn("No deletePoint bridge available.");
+      }
+    }
+
+    document.addEventListener("click", function(evt){
+      const menu = document.getElementById("mapContextMenu");
+      if(menu && menu.style.display === "block"){
+        if(evt.target !== menu && !menu.contains(evt.target)){
+          hideMapContextMenu();
+        }
+      }
+    });
+
+    document.addEventListener("keydown", function(evt){
+      if(evt.key === "Escape"){
+        hideMapContextMenu();
+      }
+    });
+
+    document.addEventListener("DOMContentLoaded", function(){
+      const deleteShift = document.getElementById("ctxDeleteShift");
+      const deleteNoShift = document.getElementById("ctxDeleteNoShift");
+      if(deleteShift){
+        deleteShift.addEventListener("click", function(){ deletePointFromContextMenu(true); });
+      }
+      if(deleteNoShift){
+        deleteNoShift.addEventListener("click", function(){ deletePointFromContextMenu(false); });
+      }
+    });
 
     function initMapillary()
     {
@@ -1703,6 +1806,7 @@
         script.src = "https://maps.googleapis.com/maps/api/js?key=" + encodeURIComponent(googleMapsKey);
         script.async = true;
         script.defer = true;
+        script.setAttribute("loading", "async");
         script.onload = () => resolve();
         script.onerror = () => reject(new Error("Failed to load Google Maps API"));
         document.head.appendChild(script);

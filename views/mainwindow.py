@@ -5955,6 +5955,30 @@ class MainWindow(QMainWindow):
         # or do nothing if you prefer just highlighting
         
         
+    def on_map_point_delete(self, idx: int, shift_next: bool):
+        """Delete a single GPX point from the map context menu."""
+        try:
+            gpx_data = self._gpx_data
+        except AttributeError:
+            return
+
+        if not isinstance(gpx_data, list) or idx < 0 or idx >= len(gpx_data):
+            return
+
+        # Select the row in the GPX list and mark it for deletion.
+        try:
+            self.gpx_widget.gpx_list.table.setCurrentCell(idx, 0)
+        except Exception:
+            pass
+
+        self.gpx_widget.gpx_list.clear_marked_range()
+        self.map_widget.clear_marked_range()
+        self.gpx_widget.gpx_list.set_markB_row(idx)
+        self.map_widget.set_markB_point(idx)
+
+        if hasattr(self, 'gpx_control') and hasattr(self.gpx_control, '_process_delete_points'):
+            self.gpx_control._process_delete_points(shift_next=shift_next)
+
     def _haversine_m(self, lat1: float, lon1: float, lat2: float, lon2: float) -> float:
         from math import radians, sin, cos, sqrt, atan2
         R = 6371000.0  # Earth radius in m
@@ -8318,7 +8342,7 @@ class MainWindow(QMainWindow):
                 from PySide6.QtWidgets import QMessageBox
                 QMessageBox.information(
                     self, "Multiple files",
-                    "Please load only one GPX/FIT-Datei via Drag & Drop.\n"
+                    "Please load only one GPX/FIT/JSON file via Drag & Drop.\n"
                     "I import the first one!."
                 )
             except Exception:
@@ -8327,12 +8351,21 @@ class MainWindow(QMainWindow):
         pl = p0.lower()
         is_gpx = pl.endswith(".gpx")
         is_fit = pl.endswith(".fit")
-        if not (is_gpx or is_fit):
+        is_json = pl.endswith(".json")
+        if not (is_gpx or is_fit or is_json):
             try:
                 from PySide6.QtWidgets import QMessageBox
-                QMessageBox.warning(self, "Unsupported", f"Not a GPX/FIT file:\n{p0}")
+                QMessageBox.warning(self, "Unsupported", f"Not a GPX/FIT/JSON file:\n{p0}")
             except Exception:
                 pass
+            return
+
+        # JSON (Geoinfer proposals) → directly import without new/append dialog
+        if is_json:
+            try:
+                self.import_proposals_json(p0)
+            except Exception as e:
+                print(f"[Drop Track] Error on {p0}: {e}")
             return
 
         # Wenn noch keine GPX/FIT geladen ist: immer New (ohne Dialog)

@@ -91,6 +91,7 @@ class MapWidget(QWidget):
         # WebChannel + Bridge
         self._bridge = MapBridge()
         self._bridge.pointClickedSignal.connect(self.onMapPointClicked)
+        self._bridge.deletePointSignal.connect(self.onMapPointDelete)
 
         self._channel = QWebChannel()
         self._channel.registerObject("mapBridge", self._bridge)
@@ -311,6 +312,12 @@ class MapWidget(QWidget):
 
         if self._mainwindow and hasattr(self._mainwindow, "on_user_selected_index"):
             self._mainwindow.on_user_selected_index(index_clicked)
+
+    @Slot(int, bool)
+    def onMapPointDelete(self, index_clicked: int, shift_next: bool):
+        """Forward delete requests from the map to the main window."""
+        if self._mainwindow and hasattr(self._mainwindow, "on_map_point_delete"):
+            self._mainwindow.on_map_point_delete(index_clicked, shift_next)
 
     # ----------------------------------------------------------
     # Hilfsfunktion: JS highlightPoint(...)

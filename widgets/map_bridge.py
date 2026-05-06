@@ -25,6 +25,7 @@ from PySide6.QtCore import QObject, Signal, Slot
 class MapBridge(QObject):
     pointClickedSignal = Signal(int)
     pointMovedSignal = Signal(int, float, float)
+    deletePointSignal = Signal(int, bool)
     syncClickedSignal = Signal(int)  # <-- Neu
     syncClickedNoArg = Signal()   # <-- Neue Signal-Variante ohne Parameter
     newPointInsertedSignal = Signal(float, float, int)
@@ -61,6 +62,12 @@ class MapBridge(QObject):
         self.pointMovedSignal.emit(index, lat, lon)
         # ... oder direkt an self.parent().onPointMoved(index, lat, lon) ...
         
+    @Slot(int, bool)
+    def deletePoint(self, index, shift_next):
+        """Called by JavaScript when the user deletes a point via context menu."""
+        print(f"[JS->Py] deletePoint idx={index} shift_next={shift_next}")
+        self.deletePointSignal.emit(index, shift_next)
+
     @Slot(int)
     def syncClicked(self, idx):
         self.syncClickedSignal.emit(idx)   # <-- NEU    
