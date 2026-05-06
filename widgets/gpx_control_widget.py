@@ -2977,10 +2977,14 @@ class GPXControlWidget(QWidget):
     
         b_idx = mw.gpx_widget.gpx_list._markB_idx
         if b_idx is None:
-            # Falls gar kein MarkB existiert => Abbruch
-            #from PySide6.QtWidgets import QMessageBox
-            QMessageBox.warning(self, "Cut <B", "No MarkB set.")
-            return
+            current_row = mw.gpx_widget.gpx_list.table.currentRow()
+            if 0 <= current_row < len(mw.gpx_widget.gpx_list._gpx_data):
+                b_idx = current_row
+            else:
+                # Falls gar kein MarkB existiert => Abbruch
+                #from PySide6.QtWidgets import QMessageBox
+                QMessageBox.warning(self, "Cut <B", "No MarkB set.")
+                return
     
         # Schneller Zugriff
         gpx_data = mw.gpx_widget.gpx_list._gpx_data
@@ -3101,9 +3105,14 @@ class GPXControlWidget(QWidget):
         # Primär: MarkE-Index
         e_idx = mw.gpx_widget.gpx_list._markE_idx
 
-        # Fallback: falls MarkE nicht gesetzt, nimm MarkB
+        # Fallback: falls MarkE nicht gesetzt, nimm aktuelle Auswahl
         if e_idx is None:
-            e_idx = mw.gpx_widget.gpx_list._markB_idx
+            current_row = mw.gpx_widget.gpx_list.table.currentRow()
+            if 0 <= current_row < len(mw.gpx_widget.gpx_list._gpx_data):
+                e_idx = current_row
+            else:
+                # Falls kein MarkE gesetzt, nimm MarkB
+                e_idx = mw.gpx_widget.gpx_list._markB_idx
 
         # Falls weder B noch E gesetzt => Fehlermeldung
         if e_idx is None:

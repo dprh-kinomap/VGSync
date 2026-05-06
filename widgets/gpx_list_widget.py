@@ -583,7 +583,19 @@ class GPXListWidget(QWidget):
 
         self.table.blockSignals(False)
  
-
+    def get_active_range(self):
+        """
+        Return the active GPX range as (markB, markE). If no range is marked,
+        use the currently selected table row as a single-point range.
+        """
+        b = self._markB_idx
+        e = self._markE_idx
+        if b is None and e is None:
+            row = self.table.currentRow()
+            if 0 <= row < len(self._gpx_data):
+                return row, row
+        return b, e
+ 
     def delete_selected_range(self, shift: bool = True):
         """
         Löscht [markB..markE], 
@@ -593,12 +605,11 @@ class GPXListWidget(QWidget):
         Danach entfernen wir die betroffenen Punkte auch aus der Karte,
         indem wir 'remove_point_on_map(stable_id)' aufrufen (NEU).
         """
-        if self._markB_idx is None:
+        b, e = self.get_active_range()
+        if b is None:
             print("[DEBUG] Nichts markiert, Abbruch.")
             return
     
-        b = self._markB_idx
-        e = self._markE_idx
         if e is None:
             e = b
         if b > e:
