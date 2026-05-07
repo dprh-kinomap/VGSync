@@ -34,8 +34,6 @@ import copy
 import tempfile
 import datetime
 import math
-import platform
-import subprocess
 import re
 import uuid
 import hashlib
@@ -81,8 +79,6 @@ from PySide6.QtWebChannel import QWebChannel
 
 #updates
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkRequest, QNetworkReply
-from PySide6.QtCore import QUrl, QTimer
-from PySide6.QtGui import QDesktopServices
 
 from .encoder_setup_dialog import EncoderSetupDialog  # Import Dialog
 
@@ -2703,8 +2699,6 @@ class MainWindow(QMainWindow):
                     }
                     gpx_data.append(new_pt)
                     insert_pos=0
-                    if self.playlist_counter > 0 :
-                        self.askSwitchCreateMode()
                 else:
                     last_pt = gpx_data[-1]
                     t_last = last_pt.get("time")
@@ -2742,8 +2736,6 @@ class MainWindow(QMainWindow):
                     }
                     gpx_data.append(new_pt)
                     insert_pos=0
-                    if self.playlist_counter > 0 :
-                        self.askSwitchCreateMode()
                 else:
                     base_pt = gpx_data[idx]
                     t_base = base_pt.get("time")
@@ -2795,18 +2787,6 @@ class MainWindow(QMainWindow):
 
         # Projekt als geändert markieren (für Autosave)
         self._project_dirty = True
-        
-    def askSwitchCreateMode(self):
-        answer = QMessageBox.question(
-            self,
-            "Switch to Street View tab?",
-            "New point creation is easier in the Street View tab. Their time will be equal to current video position.\n"
-            "Switch to it now?",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.Yes
-        )
-        if answer == QMessageBox.Yes:
-            self._set_map_video_view()
         
     def _restore_gpx_data(self, gpx_snapshot):
         self._gpx_data = copy.deepcopy(gpx_snapshot)
@@ -3751,15 +3731,6 @@ class MainWindow(QMainWindow):
     
     
     
-    def _on_gpx_list_pause_clicked(self, row_idx: int):
-        if not self.video_editor.is_playing:
-            # Statt select_point_in_pause => show_blue
-            #self.map_widget.show_blue(row_idx)
-            self.map_widget.show_blue(row_idx, do_center=True)
-            self.chart.highlight_gpx_index(row_idx)
-            if self._autoSyncNewPointsWithVideoTime and self.playlist_counter > 0:
-                self.on_map_sync_any()
-
     def _on_map_pause_clicked(self, index: int):
         """
         Wird aufgerufen, wenn im Pause-Modus in der Karte
