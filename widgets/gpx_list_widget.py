@@ -326,6 +326,9 @@ class GPXListWidget(QWidget):
         elif self._markB_idx is not None:
             # Falls nur B existiert
             self._color_mark_cell(self._markB_idx, QColor("white"))
+        elif self._markE_idx is not None:
+            # Falls nur E existiert
+            self._color_mark_cell(self._markE_idx, QColor("white"))
         
         self._markB_idx = None
         self._markE_idx = None

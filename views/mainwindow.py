@@ -65,7 +65,7 @@ from PySide6.QtWidgets import (
     QFileDialog, QMessageBox, QVBoxLayout,
     QLabel, QProgressBar, QHBoxLayout, QPushButton, QDialog,
     QApplication, QInputDialog, QSplitter, QSystemTrayIcon,
-    QFormLayout, QComboBox, QSpinBox, QMenu, QTextEdit
+    QFormLayout, QComboBox, QSpinBox, QMenu, QTextEdit, QTabBar, QStackedWidget
 )
 from PySide6.QtWidgets import QDoubleSpinBox
 from PySide6.QtWidgets import QLineEdit, QDialogButtonBox
@@ -74,6 +74,9 @@ from PySide6.QtWidgets import QToolButton, QLabel, QStyle
 
 from PySide6.QtCore import QProcess, QProcessEnvironment
 from PySide6.QtGui import QTextCursor
+from PySide6.QtWebEngineWidgets import QWebEngineView
+from PySide6.QtWebEngineCore import QWebEngineSettings
+from PySide6.QtWebChannel import QWebChannel
 
 
 #updates
@@ -90,6 +93,7 @@ from widgets.video_timeline_widget import VideoTimelineWidget
 from widgets.video_control_widget import VideoControlWidget
 from widgets.chart_widget import ChartWidget
 from widgets.map_widget import MapWidget
+from widgets.map_bridge import MapBridge
 from widgets.gpx_widget import GPXWidget
 from widgets.gpx_control_widget import GPXControlWidget
 
@@ -535,12 +539,14 @@ class MainWindow(QMainWindow):
         
                
         self._gpx_data = []
+        self._last_smoothed_gpx_signature = None
+        self._last_street_coords = None
         
         self._current_view_mode = "edit"
         self._edit_mode_sync_checked = False
         self._edit_mode_directions_checked = False
-        self._create_mode_sync_checked = True
-        self._create_mode_directions_checked = True
+        self._street_view_mode_sync_checked = True
+        self._street_view_mode_directions_checked = True
         
         # Abkoppel-Dialoge
         self._video_area_floating_dialog = None
@@ -679,14 +685,6 @@ class MainWindow(QMainWindow):
         
         view_menu = menubar.addMenu("View")
 
-        classic_view_action = view_menu.addAction("Edit mode")
-        classic_view_action.setStatusTip("Activate the standard Edit-Mode.")
-        classic_view_action.triggered.connect(self._set_classic_view)
-
-        gpx_create_mode_action = view_menu.addAction("Create mode")
-        gpx_create_mode_action.setStatusTip("Activate the Create-Mode to build GPX from scratch.")
-        gpx_create_mode_action.triggered.connect(self._set_map_video_view)
-        
         self.action_toggle_video = QAction("Video (detach)", self)
         self.action_toggle_video.setStatusTip("Detach/Attach the Video-Editor.")
         self.action_toggle_video.triggered.connect(self._toggle_video)
@@ -1094,10 +1092,48 @@ class MainWindow(QMainWindow):
         self.right_v_layout = QVBoxLayout(right_column_widget)
         self.right_v_layout.setContentsMargins(0, 0, 0, 0)
         self.right_v_layout.setSpacing(0)
+
+        right_top_tabs_row = QHBoxLayout()
+        right_top_tabs_row.setContentsMargins(0, 0, 0, 0)
+        right_top_tabs_row.addStretch(1)
+        self.right_top_view_tabs = QTabBar()
+        self.right_top_view_tabs.addTab("Chart")
+        self.right_top_view_tabs.addTab("Street View")
+        self.right_top_view_tabs.currentChanged.connect(self._on_right_top_view_tab_changed)
+        right_top_tabs_row.addWidget(self.right_top_view_tabs)
+        self.right_v_layout.addLayout(right_top_tabs_row)
         
         # Oben: Chart (40%) => Stretch 2
         self.chart = ChartWidget()
-        self.right_v_layout.addWidget(self.chart, stretch=2)
+        self.right_top_stack = QStackedWidget()
+        self.right_top_stack.addWidget(self.chart)
+
+        self.street_view_widget = QWidget()
+        self.street_view_layout = QVBoxLayout(self.street_view_widget)
+        self.street_view_layout.setContentsMargins(0, 0, 0, 0)
+        self.street_view_layout.setSpacing(0)
+        self.street_view_view = QWebEngineView(self.street_view_widget)
+        self.street_view_view.settings().setAttribute(
+            QWebEngineSettings.LocalContentCanAccessRemoteUrls, True
+        )
+        self._street_view_bridge = MapBridge()
+        self._street_view_channel = QWebChannel()
+        self._street_view_channel.registerObject("mapBridge", self._street_view_bridge)
+        self.street_view_view.page().setWebChannel(self._street_view_channel)
+        self._street_view_bridge.mapCoordinateClickedSignal.connect(self._on_street_view_coordinate_changed)
+        self._street_view_bridge.newPointInsertedSignal.connect(self.on_new_gpx_point_inserted)
+        self.street_view_layout.addWidget(self.street_view_view)
+        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        street_html_path = os.path.join(base_dir, "map_page.html")
+        self.street_view_view.load(QUrl.fromLocalFile(street_html_path))
+        self.street_view_view.loadFinished.connect(self._on_street_view_page_loaded)
+        self.right_top_stack.addWidget(self.street_view_widget)
+
+        self.right_v_layout.addWidget(self.right_top_stack, stretch=2)
+        self._street_view_sync_timer = QTimer(self)
+        self._street_view_sync_timer.setInterval(400)
+        self._street_view_sync_timer.timeout.connect(self._mirror_street_view_marker_to_left_map)
+        self._street_view_sync_timer.start()
         
                 
         
@@ -1171,6 +1207,7 @@ class MainWindow(QMainWindow):
         
         self.bottom_right_layout.addWidget(self.gpx_widget, stretch=5)
         self.right_v_layout.addWidget(self.bottom_right_widget, stretch=3)
+        self.right_top_view_tabs.setCurrentIndex(0)
         
         #
         # ============== QSplitter (horizontal) ==============
@@ -1360,6 +1397,7 @@ class MainWindow(QMainWindow):
         cut_on = edit_on and (not self.gpx_widget.gpx_list._gpx_data or is_gpx_video_shift_set())
         self.video_control.set_editing_mode(edit_on,cut_on)
         self.map_widget.view.loadFinished.connect(self._on_map_page_loaded)
+        self.map_widget.mapCoordinateClicked.connect(self._on_map_coordinate_clicked)
         self.video_editor.set_final_time_callback(self._compute_final_time)
         
         self.video_editor.videosDropped.connect(self._on_videos_dropped)       # Player
@@ -1369,6 +1407,7 @@ class MainWindow(QMainWindow):
     
     def _on_gpx_row_selected(self, row_idx: int):
         self.map_widget.set_selected_point(row_idx)
+        self._sync_street_view_to_index(row_idx)
 
 
 
@@ -1477,8 +1516,8 @@ class MainWindow(QMainWindow):
         # Update mode state
         if self._current_view_mode == "edit":
             self._edit_mode_directions_checked = checked
-        elif self._current_view_mode == "create":
-            self._create_mode_directions_checked = checked
+        elif self._current_view_mode == "street_view":
+            self._street_view_mode_directions_checked = checked
 
     def _nominatim_search(self, query: str, accept_language: str | None = None, countrycodes: str | None = None):
         base_url = "https://nominatim.openstreetmap.org/search"
@@ -1591,50 +1630,133 @@ class MainWindow(QMainWindow):
         QDesktopServices.openUrl(QUrl.fromLocalFile(pdf_path))    
     
     def _set_classic_view(self):
-        self.left_v_layout.addWidget(self.map_widget, stretch=1)
-        self.map_widget.setParent(self.left_v_layout.parentWidget())
-        self.map_widget.show()
-
-        self.chart.show()
-        self.bottom_right_widget.show()
-
-        self.map_widget.view.page().runJavaScript("enableVideoMapMode(false);")
-
-        # Save current state to create mode
-        self._create_mode_sync_checked = self.action_new_pts_video_time.isChecked()
-        self._create_mode_directions_checked = self.action_map_directions.isChecked()
+        # Keep map fixed on the left. Only switch right top panel content.
+        self.right_top_stack.setCurrentIndex(0)
         
         self._current_view_mode = "edit"
-        
-        # Set to edit mode state
-        self.action_new_pts_video_time.setChecked(self._edit_mode_sync_checked)
-        self._on_sync_point_video_time_toggled(self._edit_mode_sync_checked)
-        self.action_map_directions.setChecked(self._edit_mode_directions_checked)
-        self._on_map_directions_toggled(self._edit_mode_directions_checked)
+        self._sync_right_top_view_tab()
 
 
     def _set_map_video_view(self):
-        self.right_v_layout.removeWidget(self.chart)
-        self.chart.hide()
-
-        self.right_v_layout.removeWidget(self.bottom_right_widget)
-        self.bottom_right_widget.hide()
-
-        self.right_v_layout.addWidget(self.map_widget, stretch=1)
-        self.map_widget.view.page().runJavaScript("enableVideoMapMode(true);")
+        # Keep map fixed on the left. Show dedicated street-view panel on the right.
+        self.right_top_stack.setCurrentIndex(1)
+        row_idx = self.gpx_widget.gpx_list.table.currentRow()
+        self._sync_street_view_to_index(row_idx)
         self.right_v_layout.update()
+        
+        self._current_view_mode = "street_view"
+        self._sync_right_top_view_tab()
 
-        # Save current state to edit mode
-        self._edit_mode_sync_checked = self.action_new_pts_video_time.isChecked()
-        self._edit_mode_directions_checked = self.action_map_directions.isChecked()
-        
-        self._current_view_mode = "create"
-        
-        # Set to create mode state
-        self.action_new_pts_video_time.setChecked(self._create_mode_sync_checked)
-        self._on_sync_point_video_time_toggled(self._create_mode_sync_checked)
-        self.action_map_directions.setChecked(self._create_mode_directions_checked)
-        self._on_map_directions_toggled(self._create_mode_directions_checked)
+    def _on_right_top_view_tab_changed(self, tab_index: int):
+        if tab_index == 0:
+            self._set_classic_view()
+        elif tab_index == 1:
+            self._set_map_video_view()
+
+    def _sync_right_top_view_tab(self):
+        tabs = getattr(self, "right_top_view_tabs", None)
+        if not tabs:
+            return
+        target_index = 0 if self._current_view_mode == "edit" else 1
+        if tabs.currentIndex() == target_index:
+            return
+        tabs.blockSignals(True)
+        tabs.setCurrentIndex(target_index)
+        tabs.blockSignals(False)
+
+    def _on_street_view_page_loaded(self, ok: bool):
+        if not ok:
+            print("[WARN] Street view panel page could not be loaded.")
+            return
+        page = self.street_view_view.page()
+        page.runJavaScript("setMapillaryKey('{}')".format(self._mapillary_key))
+        page.runJavaScript("setGoogleMapsKey('{}')".format(self._google_maps_key))
+        page.runJavaScript("setStreetViewDockMode(true);")
+        page.runJavaScript("setStreetViewMode('mapillary');")
+        page.runJavaScript("setStreetViewVisible(true);")
+
+    def _sync_street_view_to_index(self, idx: int):
+        if self._current_view_mode != "street_view":
+            return
+        if not hasattr(self, "street_view_view"):
+            return
+        try:
+            idx = int(idx)
+        except Exception:
+            return
+        if idx < 0 or idx >= len(self._gpx_data):
+            return
+        pt = self._gpx_data[idx]
+        lat = pt.get("lat")
+        lon = pt.get("lon")
+        if lat is None or lon is None:
+            return
+        print(f"[DEBUG] _sync_street_view_to_index idx={idx} lat={lat} lon={lon}")
+        self._update_left_map_street_marker(lat, lon, center=False)
+        js = (
+            "setStreetViewVisible(true);"
+            "navigateStreetView({lat}, {lon});"
+        ).format(lat=lat, lon=lon)
+        self.street_view_view.page().runJavaScript(js)
+
+    def _on_map_coordinate_clicked(self, lat: float, lon: float):
+        # Preserve old behavior: clicking anywhere on map updates street view.
+        if self._current_view_mode != "street_view":
+            return
+        print(f"[DEBUG] _on_map_coordinate_clicked lat={lat} lon={lon}")
+        if hasattr(self, "street_view_view") and self.street_view_view:
+            js = (
+                "setStreetViewVisible(true);"
+                "navigateStreetView({lat}, {lon});"
+            ).format(lat=lat, lon=lon)
+            self.street_view_view.page().runJavaScript(js)
+        self._update_left_map_street_marker(lat, lon, center=False)
+
+    def _on_street_view_coordinate_changed(self, lat: float, lon: float):
+        # Called by the right Street View panel whenever its current position changes.
+        if self._current_view_mode != "street_view":
+            return
+        self._update_left_map_street_marker(lat, lon, center=False)
+
+    def _update_left_map_street_marker(self, lat: float, lon: float, center: bool = False):
+        if not self.map_widget or not self.map_widget.view:
+            return
+        center_js = ""
+        if center:
+            center_js = f"if (map) map.getView().animate({{center: ol.proj.fromLonLat([{lon}, {lat}]), duration: 400}});"
+        js = (
+            f"if (typeof drawMapillaryCrossMarker==='function') "
+            f"drawMapillaryCrossMarker({lon}, {lat});"
+            f"{center_js}"
+        )
+        self.map_widget.view.page().runJavaScript(js)
+
+    def _mirror_street_view_marker_to_left_map(self):
+        # Only mirror while Street View tab is active.
+        if self._current_view_mode != "street_view":
+            return
+        if not hasattr(self, "street_view_view") or not self.street_view_view:
+            return
+        if not self.map_widget or not self.map_widget.view:
+            return
+
+        js_get_coords = "(typeof streetCoords !== 'undefined' && streetCoords) ? streetCoords : null;"
+
+        def _on_coords(coords):
+            if not coords:
+                return
+            try:
+                lon = float(coords[0])
+                lat = float(coords[1])
+            except Exception:
+                return
+            rounded = (round(lon, 7), round(lat, 7))
+            if self._last_street_coords == rounded:
+                return
+            self._last_street_coords = rounded
+            self._update_left_map_street_marker(lat, lon, center=False)
+
+        self.street_view_view.page().runJavaScript(js_get_coords, 0, _on_coords)
         
     def _on_show_mpv_path(self):
         s = QSettings("KVRouite", "KVRouite")
@@ -1818,6 +1940,12 @@ class MainWindow(QMainWindow):
         if self._mapillary_key:
             page.runJavaScript(f"setMapillaryKey('{self._mapillary_key}')")   
         page.runJavaScript(f"setGoogleMapsKey('{self._google_maps_key}')")
+
+        if hasattr(self, "street_view_view") and self.street_view_view:
+            street_page = self.street_view_view.page()
+            if self._mapillary_key:
+                street_page.runJavaScript(f"setMapillaryKey('{self._mapillary_key}')")
+            street_page.runJavaScript(f"setGoogleMapsKey('{self._google_maps_key}')")
 
 
     def _on_set_maptiler_key(self):
@@ -2671,8 +2799,8 @@ class MainWindow(QMainWindow):
     def askSwitchCreateMode(self):
         answer = QMessageBox.question(
             self,
-            "Switch to Create Mode?",
-            "New point creation is easier in 'creation' mode. Their time will be equal to current video position.\n"
+            "Switch to Street View tab?",
+            "New point creation is easier in the Street View tab. Their time will be equal to current video position.\n"
             "Switch to it now?",
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.Yes
@@ -3121,8 +3249,8 @@ class MainWindow(QMainWindow):
         # Update mode state
         if self._current_view_mode == "edit":
             self._edit_mode_sync_checked = checked
-        elif self._current_view_mode == "create":
-            self._create_mode_sync_checked = checked
+        elif self._current_view_mode == "street_view":
+            self._street_view_mode_sync_checked = checked
         
    
     
@@ -3341,6 +3469,7 @@ class MainWindow(QMainWindow):
         #    => so bleibt Map und Liste synchron
         self.gpx_widget.gpx_list.select_row_in_pause(new_index)
         self.chart.highlight_gpx_index(new_index)
+        self._sync_street_view_to_index(new_index)
 
 
     
@@ -4309,6 +4438,7 @@ class MainWindow(QMainWindow):
 
        
         self.chart.highlight_gpx_index(index)
+        self._sync_street_view_to_index(index)
 
     def _on_chart_elevation_point_edited(self, index: int, new_ele: float):
         """
@@ -5947,6 +6077,7 @@ class MainWindow(QMainWindow):
         # 4) MiniChart
         if self.mini_chart_widget:
             self.mini_chart_widget.set_current_index(idx)
+        self._sync_street_view_to_index(idx)
 
         # 5) (Optional) => Video 
         #    Falls du direkt zum passenden Zeitpunkt springen willst:
@@ -6777,18 +6908,19 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "No GPX", "No GPX data available!")
             return
 
-        # --- 1) Hinweis/Bestätigung ---
-        reply = QMessageBox.question(
-            self,
-            "Save GPX",
-            "Have you smoothed the GPX data?\n\n"
-            "It is highly recommended to smooth your GPX before saving.\n"
-            "Do you want to continue saving?",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No
-        )
-        if reply == QMessageBox.No:
-            return
+        # --- 1) Hinweis/Bestätigung (nur wenn seitdem nicht geglättet) ---
+        if not self._is_current_gpx_smoothed():
+            reply = QMessageBox.question(
+                self,
+                "Save GPX",
+                "Have you smoothed the GPX data?\n\n"
+                "It is highly recommended to smooth your GPX before saving.\n"
+                "Do you want to continue saving?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No
+            )
+            if reply == QMessageBox.No:
+                return
 
         # --- 2) Datei wählen ---
         out_path, _ = QFileDialog.getSaveFileName(
@@ -6921,6 +7053,31 @@ class MainWindow(QMainWindow):
             print("[WARN] Could not increment GPX counter on server.")
 
         QMessageBox.information(self, "Done", f"GPX saved as '{out_path}'.")
+
+    def _compute_gpx_smoothing_signature(self, gpx_data) -> str | None:
+        if not gpx_data:
+            return None
+        h = hashlib.sha1()
+        for pt in gpx_data:
+            try:
+                lat = float(pt.get("lat", 0.0))
+                lon = float(pt.get("lon", 0.0))
+                ele = float(pt.get("ele", 0.0))
+            except Exception:
+                lat, lon, ele = 0.0, 0.0, 0.0
+            t = pt.get("time")
+            t_key = t.isoformat() if hasattr(t, "isoformat") else str(t)
+            h.update(f"{lat:.7f}|{lon:.7f}|{ele:.4f}|{t_key}\n".encode("utf-8"))
+        return h.hexdigest()
+
+    def mark_current_gpx_as_smoothed(self):
+        gpx_data = getattr(self.gpx_widget.gpx_list, "_gpx_data", [])
+        self._last_smoothed_gpx_signature = self._compute_gpx_smoothing_signature(gpx_data)
+
+    def _is_current_gpx_smoothed(self) -> bool:
+        gpx_data = getattr(self.gpx_widget.gpx_list, "_gpx_data", [])
+        current_sig = self._compute_gpx_smoothing_signature(gpx_data)
+        return bool(current_sig) and current_sig == self._last_smoothed_gpx_signature
 
                 
     def _on_show_temp_dir(self):

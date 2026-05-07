@@ -56,6 +56,7 @@ class MapWidget(QWidget):
     # Signale
     pointClickedInPause = Signal(int)
     pointClickedInMap   = Signal(int)  # optional fürs MainWindow
+    mapCoordinateClicked = Signal(float, float)
 
     def __init__(self, mainwindow=None, parent=None):
         super().__init__(parent)
@@ -112,6 +113,7 @@ class MapWidget(QWidget):
         self._bridge.newPointInsertedSignal.connect(self._on_new_point_inserted)
         self._bridge.mapboxProfileChangedSignal.connect(self._on_mapbox_profile_changed)
         self._bridge.searchLocationRequestedSignal.connect(self._on_search_location_requested)
+        self._bridge.mapCoordinateClickedSignal.connect(self._on_map_coordinate_clicked)
 
         # --- Drag&Drop: GPX/FIT auf die Karte ---
         self.setAcceptDrops(True)
@@ -192,6 +194,10 @@ class MapWidget(QWidget):
     def _on_search_location_requested(self):
         if self._mainwindow and hasattr(self._mainwindow, "_on_search_location_triggered"):
             self._mainwindow._on_search_location_triggered()
+
+    @Slot(float, float)
+    def _on_map_coordinate_clicked(self, lat: float, lon: float):
+        self.mapCoordinateClicked.emit(lat, lon)
 
     def on_point_moved(self, index: int, lat: float, lon: float):
         """

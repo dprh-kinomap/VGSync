@@ -1710,6 +1710,8 @@ class GPXControlWidget(QWidget):
         mw.chart.set_gpx_data(gpx_data)
         if mw.mini_chart_widget:
             mw.mini_chart_widget.set_gpx_data(gpx_data)
+        if hasattr(mw, "mark_current_gpx_as_smoothed"):
+            mw.mark_current_gpx_as_smoothed()
             
         QMessageBox.information(
             self, "Smooth done",
@@ -1722,6 +1724,26 @@ class GPXControlWidget(QWidget):
         n = len(gpx_data)
         if n < 3:
             return
+        orig_ele = [float(pt.get("ele", 0.0)) for pt in gpx_data]
+
+        # Guard against a single bogus endpoint elevation sample (common with
+        # some GPX sources). A first value like 0m while all others are ~500m
+        # creates the exact "rise from 0" artifact after smoothing.
+        if n >= 3:
+            endpoint_jump_m = 120.0
+            neighbor_consistency_m = 40.0
+
+            if (
+                abs(orig_ele[0] - orig_ele[1]) > endpoint_jump_m
+                and abs(orig_ele[2] - orig_ele[1]) < neighbor_consistency_m
+            ):
+                orig_ele[0] = orig_ele[1]
+
+            if (
+                abs(orig_ele[-1] - orig_ele[-2]) > endpoint_jump_m
+                and abs(orig_ele[-3] - orig_ele[-2]) < neighbor_consistency_m
+            ):
+                orig_ele[-1] = orig_ele[-2]
 
         # --- 1) Compute distances ---
         dist_m = [0.0] * n
@@ -1740,21 +1762,6 @@ class GPXControlWidget(QWidget):
                 start = i
         segments.append((start, n-1))
 
-        # --- Vertical realignment at cuts ---
-        for seg_idx in range(1, len(segments)):
-            prev_start, prev_end = segments[seg_idx - 1]
-            cur_start, cur_end   = segments[seg_idx]
-
-            # trusted elevation before cut
-            anchor_ele = gpx_data[prev_end]["ele"]
-
-            # elevation jump at segment start
-            delta = anchor_ele - gpx_data[cur_start]["ele"]
-
-            # shift entire segment
-            for i in range(cur_start, cur_end + 1):
-                gpx_data[i]["ele"] += delta
-
         # --- 3) Process each segment independently ---
         for seg_start, seg_end in segments:
             if seg_end - seg_start < 2:
@@ -1768,16 +1775,20 @@ class GPXControlWidget(QWidget):
                 i = seg_start + j
                 d = dist_m[i]
                 if d > 0.5:
-                    slope[j] = ((gpx_data[i]["ele"] - gpx_data[i-1]["ele"]) / d) * 100.0
+                    slope[j] = ((orig_ele[i] - orig_ele[i-1]) / d) * 100.0
                 else:
                     slope[j] = slope[j-1]
 
             # --- box smoothing ---
+            # IMPORTANT: use the original slope values as input for each window.
+            # Using slope_smooth in-place here feeds already smoothed values back
+            # into later windows and can create a strong artificial trend.
+            slope_source = slope[:]
             slope_smooth = slope[:]
             for j in range(length):
                 s = max(0, j - box_size)
                 e = min(length - 1, j + box_size)
-                vals = slope_smooth[s:e+1]
+                vals = slope_source[s:e+1]
                 slope_smooth[j] = sum(vals) / len(vals)
 
             # --- flatten jumps ---
@@ -1788,63 +1799,30 @@ class GPXControlWidget(QWidget):
 
             # --- reconstruct elevation ---
             new_ele = [0.0] * length
-            new_ele[0] = gpx_data[seg_start]["ele"]
+            new_ele[0] = orig_ele[seg_start]
             for j in range(1, length):
                 i = seg_start + j
                 new_ele[j] = new_ele[j-1] + dist_m[i] * (slope_smooth[j] / 100.0)
 
-            # --- drift correction inside segment ---
-            orig_end = gpx_data[seg_end]["ele"]
-            drift = new_ele[-1] - orig_end
-            if abs(drift) > 1e-6:
-                for j in range(length):
-                    t = j / (length - 1)
-                    new_ele[j] -= drift * t
-
-            # --- segment baseline clamp ---
-            orig_min = min(gpx_data[i]["ele"] for i in range(seg_start, seg_end + 1))
-            new_min = min(new_ele)
-
-            # 1) Verhindere, dass die geglättete Kurve UNTER das ursprüngliche Minimum fällt
-            if new_min < orig_min:
-                lift = orig_min - new_min
-                new_ele = [e + lift for e in new_ele]
-                new_min = min(new_ele)
-
-            # 2) Harte Untergrenze 0 m: keine negativen Höhen zulassen
-            if new_min < 0.0:
-                lift0 = -new_min
-                new_ele = [e + lift0 for e in new_ele]
+            # Do not force end-anchor drift correction here.
+            # If boundary elevations are noisy/outliers, anchoring start+end can
+            # bend the whole segment into an artificial long trend.
 
             # --- write back only segment ---
             for j in range(length):
                 gpx_data[seg_start + j]["ele"] = new_ele[j]
 
-        # --- Post-smoothing realignment across segments (once) ---
+        # Re-align segment boundaries after smoothing:
+        # keep each segment's internal shape, only apply a vertical offset so
+        # there is no elevation jump at detected distance cuts.
         for seg_idx in range(1, len(segments)):
             prev_start, prev_end = segments[seg_idx - 1]
-            cur_start, cur_end   = segments[seg_idx]
-
-            anchor_ele = gpx_data[prev_end]["ele"]
-            delta = anchor_ele - gpx_data[cur_start]["ele"]
-
-            # optional safety threshold
-            if abs(delta) < 30.0:
-                for i in range(cur_start, cur_end + 1):
-                    gpx_data[i]["ele"] += delta
-
-        # --- Final global clamp: avoid negative elevations at all ---
-        try:
-            global_min = min(float(pt.get("ele", 0.0)) for pt in gpx_data)
-        except Exception:
-            global_min = 0.0
-        if global_min < 0.0:
-            lift_all = -global_min
-            for pt in gpx_data:
-                try:
-                    pt["ele"] = float(pt.get("ele", 0.0)) + lift_all
-                except Exception:
-                    continue
+            cur_start, cur_end = segments[seg_idx]
+            delta = float(gpx_data[prev_end].get("ele", 0.0)) - float(gpx_data[cur_start].get("ele", 0.0))
+            if abs(delta) < 1e-9:
+                continue
+            for i in range(cur_start, cur_end + 1):
+                gpx_data[i]["ele"] = float(gpx_data[i].get("ele", 0.0)) + delta
 
     # ===========  NEU am Ende von mainwindow.py ============    
     

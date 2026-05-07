@@ -31,6 +31,7 @@ class MapBridge(QObject):
     newPointInsertedSignal = Signal(float, float, int)
     mapboxProfileChangedSignal = Signal(str)  
     searchLocationRequestedSignal = Signal()
+    mapCoordinateClickedSignal = Signal(float, float)
     
         
     def __init__(self, parent=None):
@@ -88,6 +89,11 @@ class MapBridge(QObject):
         Called from the map HTML when the location search button is pressed.
         """
         self.searchLocationRequestedSignal.emit()
+
+    @Slot(float, float)
+    def mapCoordinateClicked(self, lat, lon):
+        """Called by JavaScript when user clicks any map coordinate."""
+        self.mapCoordinateClickedSignal.emit(lat, lon)
 
     @Slot(float, float, int)
     def newPointInserted(self, lat, lon, idx):

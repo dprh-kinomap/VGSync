@@ -328,30 +328,6 @@
       user-select: none;
     }
 
-    #mapillaryViewer.collapsed {
-      height: auto !important;
-      min-height: 30px;
-      max-height: 40px;
-      overflow: hidden;
-    }
-
-    #mapillaryViewer.collapsed .mly-container {
-      display: none;
-    }
-
-    #mapillaryViewerHeader button.restore {
-      transform: rotate(180deg);
-    }
-    #streetViewHeaderActions {
-      position: absolute;
-      right: 8px;
-      top: 50%;
-      transform: translateY(-50%);
-      display: inline-flex;
-      align-items: center;
-      gap: 8px;
-    }
-
     #splitter {
       height: 6px;
       background: #ccc;
@@ -406,9 +382,6 @@
             <button id="btnStreetMapillary" class="active" title="Use Mapillary">Mapillary</button>
             <button id="btnStreetGoogle" title="Use Google Street View">Google Street View</button>
           </span>
-        </div>
-        <div id="streetViewHeaderActions">
-          <button id="collapseViewerBtn" title="Hide/Open">✕</button>
         </div>
       </div>
       <button id="btnNewStreetPoint" class="custom-map-btn" title="Insert a new point at the street view location with current video time">
@@ -494,6 +467,53 @@
       }
 
       if (map) map.updateSize(); // ensures OpenLayers resizes properly
+    }
+
+    function setStreetViewVisible(visible) {
+      const viewerEl = document.getElementById("mapillaryViewer");
+      if (!viewerEl) return;
+
+      if (visible) {
+        viewerEl.style.height = "60%";
+        viewerEl.style.overflow = "hidden";
+        viewerEl.style.display = "flex";
+
+        if (mapillaryViewer) {
+          mapillaryViewer.resize();
+        }
+        if (selectedCoord) {
+          navigateStreetView(selectedCoord[1], selectedCoord[0]);
+        }
+      } else {
+        viewerEl.style.height = "0";
+        viewerEl.style.display = "none";
+      }
+
+      if (map) map.updateSize();
+    }
+
+    function setStreetViewDockMode(enabled) {
+      const mapEl = document.getElementById("mapContainer");
+      const viewerEl = document.getElementById("mapillaryViewer");
+      const splitterEl = document.getElementById("splitter");
+      if (!mapEl || !viewerEl || !splitterEl) return;
+
+      if (enabled) {
+        mapEl.style.display = "none";
+        splitterEl.style.display = "none";
+        viewerEl.style.display = "flex";
+        viewerEl.style.height = "100%";
+        viewerEl.style.flex = "1";
+      } else {
+        mapEl.style.display = "block";
+        splitterEl.style.display = "block";
+        mapEl.style.flex = "1";
+      }
+
+      if (map) map.updateSize();
+      if (mapillaryViewer && enabled) {
+        setTimeout(() => mapillaryViewer.resize(), 60);
+      }
     }
 
   </script>
@@ -618,6 +638,12 @@
       }
     }
 
+    function notifyStreetPosition(lat, lon) {
+      if (channelObj && channelObj.mapCoordinateClicked) {
+        channelObj.mapCoordinateClicked(lat, lon);
+      }
+    }
+
     function showKeyWarning(msg){
       const kw = document.getElementById("keyWarning");
       if(!kw) return;
@@ -681,17 +707,6 @@
       });
 
       resizeObserver.observe(viewerDiv);
-
-      const collapseBtn = document.getElementById("collapseViewerBtn");
-      collapseBtn.addEventListener("click", () => {
-      const isCollapsed = viewerDiv.classList.toggle("collapsed");
-      collapseBtn.textContent = isCollapsed ? "⬍" : "✕";
-      collapseBtn.classList.toggle("restore", isCollapsed);
-
-        if (!isCollapsed && mapillaryViewer) {
-          setTimeout(() => mapillaryViewer.resize(), 100); // re-render viewer after uncollapse
-        }
-      });
 
       const splitter = document.getElementById('splitter');
       const topPane = document.getElementById('mapContainer');
@@ -931,6 +946,11 @@
         selectedIndex=null;
 
         if(!channelObj) return;
+        let llClick = ol.proj.toLonLat(evt.coordinate);
+        if (channelObj.mapCoordinateClicked) {
+          channelObj.mapCoordinateClicked(llClick[1], llClick[0]);
+        }
+
         map.forEachFeatureAtPixel(evt.pixel, function(feature){
           let idx= feature.get("index");
           let sid= feature.get("stable_id");
@@ -961,8 +981,7 @@
 
         //if street view visible
         if (mapillaryContainer && mapillaryContainer.getBoundingClientRect().height > 10){
-          let ll = ol.proj.toLonLat(evt.coordinate);
-          navigateStreetView(ll[1], ll[0]);
+          navigateStreetView(llClick[1], llClick[0]);
         }
       });
 
@@ -1072,6 +1091,7 @@
                   streetCoords = [lon, lat];
                   drawMapillaryCrossMarker(lon, lat);
                   map.getView().animate({center: ol.proj.fromLonLat(streetCoords), duration: 600});
+                  notifyStreetPosition(lat, lon);
                 } else {
                   console.warn("No geometry for image", imageId);
                 }
@@ -1905,6 +1925,7 @@
                 streetCoords = [lonNow, latNow];
                 drawMapillaryCrossMarker(lonNow, latNow);
                 map.getView().animate({center: ol.proj.fromLonLat(streetCoords), duration: 600});
+                notifyStreetPosition(latNow, lonNow);
               });
             }
             if (!googleStreetViewService) {
@@ -1920,6 +1941,7 @@
                   streetCoords = [data.location.latLng.lng(), data.location.latLng.lat()];
                   drawMapillaryCrossMarker(streetCoords[0], streetCoords[1]);
                   map.getView().animate({center: ol.proj.fromLonLat(streetCoords), duration: 600});
+                  notifyStreetPosition(streetCoords[1], streetCoords[0]);
                 } else {
                   showNoStreetView();
                 }
