@@ -30,13 +30,16 @@ import config
 import path_manager  # your module above
 import urllib.request
 import urllib.parse
+import urllib.error
 import copy
 import tempfile
 import datetime
+import time
 import math
 import platform
 import subprocess
 import re
+import tarfile
 import uuid
 import hashlib
 import statistics
@@ -65,7 +68,8 @@ from PySide6.QtWidgets import (
     QFileDialog, QMessageBox, QVBoxLayout,
     QLabel, QProgressBar, QHBoxLayout, QPushButton, QDialog,
     QApplication, QInputDialog, QSplitter, QSystemTrayIcon,
-    QFormLayout, QComboBox, QSpinBox, QMenu, QTextEdit, QTabBar, QStackedWidget
+    QFormLayout, QComboBox, QSpinBox, QMenu, QTextEdit, QTabBar, QStackedWidget,
+    QProgressDialog
 )
 from PySide6.QtWidgets import QDoubleSpinBox
 from PySide6.QtWidgets import QLineEdit, QDialogButtonBox
@@ -613,6 +617,11 @@ class MainWindow(QMainWindow):
         load_mp4_action.setStatusTip("Load one or more Videos.")
         load_mp4_action.triggered.connect(self.load_mp4_files)
         file_menu.addAction(load_mp4_action)
+
+        geoinfer_upload_action = QAction("Upload Video Package to GeoInfer...", self)
+        geoinfer_upload_action.setStatusTip("Extract frames, build tar.gz package and upload via GeoInfer Automations API.")
+        geoinfer_upload_action.triggered.connect(self.on_upload_geoinfer_package_clicked)
+        file_menu.addAction(geoinfer_upload_action)
         
         
         file_menu.addSeparator()
@@ -7309,6 +7318,299 @@ class MainWindow(QMainWindow):
                 "Error Loading File", 
                 f"Failed to load track file:\n{str(e)}"
             )
+
+    def _sanitize_video_id(self, raw: str) -> str:
+        s = (raw or "").strip()
+        s = re.sub(r"[^A-Za-z0-9_-]+", "_", s)
+        s = s.strip("_-")
+        if not s:
+            s = "video_upload"
+        return s[:128]
+
+    def _ask_geoinfer_api_key(self) -> str | None:
+        settings = QSettings("KVRouite", "KVRouite")
+        current = settings.value("geoinfer/api_key", "", type=str) or ""
+        key, ok = QInputDialog.getText(
+            self,
+            "GeoInfer API Key",
+            "Enter your GeoInfer automation API key:",
+            QLineEdit.Normal,
+            current
+        )
+        if not ok:
+            return None
+        key = (key or "").strip()
+        if not key:
+            QMessageBox.warning(self, "Missing API Key", "GeoInfer API key is required.")
+            return None
+        settings.setValue("geoinfer/api_key", key)
+        return key
+
+    def _ask_video_id_for_upload(self, video_path: str) -> str | None:
+        base = os.path.splitext(os.path.basename(video_path))[0]
+        default_id = self._sanitize_video_id(base)
+        video_id, ok = QInputDialog.getText(
+            self,
+            "GeoInfer Video ID",
+            "Enter video_id (A-Z, a-z, 0-9, _ or -):",
+            QLineEdit.Normal,
+            default_id
+        )
+        if not ok:
+            return None
+        video_id = self._sanitize_video_id(video_id)
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", video_id):
+            QMessageBox.warning(self, "Invalid video_id", "video_id must match [A-Za-z0-9_-]{1,128}.")
+            return None
+        return video_id
+
+    def _ask_prepass_script_path(self) -> str | None:
+        settings = QSettings("KVRouite", "KVRouite")
+        project_default = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "tools", "video_prepass.py")
+        default_script = settings.value("geoinfer/prepass_script", project_default, type=str)
+        if os.path.isfile(default_script):
+            return default_script
+        script_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select frame extraction script",
+            default_script or "",
+            "Python files (*.py);;All files (*.*)"
+        )
+        if not script_path:
+            return None
+        settings.setValue("geoinfer/prepass_script", script_path)
+        return script_path
+
+    def on_upload_geoinfer_package_clicked(self):
+        if not self.playlist:
+            QMessageBox.warning(self, "No video", "Please import a video first.")
+            return
+
+        video_path = self.playlist[0]
+        if not os.path.isfile(video_path):
+            QMessageBox.warning(self, "Video not found", f"File does not exist:\n{video_path}")
+            return
+
+        script_path = self._ask_prepass_script_path()
+        if not script_path:
+            return
+
+        api_key = self._ask_geoinfer_api_key()
+        if not api_key:
+            return
+
+        video_id = self._ask_video_id_for_upload(video_path)
+        if not video_id:
+            return
+
+        include_gpx = (QMessageBox.question(
+            self,
+            "Include GPX",
+            "Include current GPX as metadata/track.gpx?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.Yes
+        ) == QMessageBox.Yes)
+
+        progress = QProgressDialog("Preparing GeoInfer package...", "Cancel", 0, 100, self)
+        progress.setWindowTitle("GeoInfer Upload")
+        progress.setMinimumDuration(0)
+        progress.setValue(1)
+        QApplication.processEvents()
+
+        try:
+            with tempfile.TemporaryDirectory(prefix="geoinfer_upload_") as tmpdir:
+                prepass_out = os.path.join(tmpdir, "prepass_out")
+                pkg_root = os.path.join(tmpdir, video_id)
+                frames_dst = os.path.join(pkg_root, "frames")
+                metadata_dst = os.path.join(pkg_root, "metadata")
+                os.makedirs(frames_dst, exist_ok=True)
+                os.makedirs(metadata_dst, exist_ok=True)
+
+                progress.setLabelText("Running frame extraction prepass...")
+                progress.setRange(0, 0)  # indeterminate while external script runs
+                QApplication.processEvents()
+                project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+                venv_py = os.path.join(project_root, ".venv", "Scripts", "python.exe")
+                python_candidates = [venv_py, sys.executable] if os.path.isfile(venv_py) else [sys.executable]
+                last_error = "Unknown error"
+                ok = False
+                for py_exec in python_candidates:
+                    cmd = [py_exec, script_path, "--video", video_path, "--out", prepass_out]
+                    stdout_log = os.path.join(tmpdir, "prepass_stdout.log")
+                    stderr_log = os.path.join(tmpdir, "prepass_stderr.log")
+                    with open(stdout_log, "w", encoding="utf-8", errors="replace") as out_f, \
+                         open(stderr_log, "w", encoding="utf-8", errors="replace") as err_f:
+                        proc = subprocess.Popen(cmd, stdout=out_f, stderr=err_f, text=True)
+                        while proc.poll() is None:
+                            if progress.wasCanceled():
+                                try:
+                                    proc.terminate()
+                                except Exception:
+                                    pass
+                                raise RuntimeError("Upload cancelled by user.")
+                            QApplication.processEvents()
+                            time.sleep(0.1)
+                    try:
+                        with open(stdout_log, "r", encoding="utf-8", errors="replace") as f:
+                            stdout = f.read()
+                    except Exception:
+                        stdout = ""
+                    try:
+                        with open(stderr_log, "r", encoding="utf-8", errors="replace") as f:
+                            stderr = f.read()
+                    except Exception:
+                        stderr = ""
+                    if proc.returncode == 0:
+                        ok = True
+                        break
+                    last_error = stderr or stdout or last_error
+                    # Retry with next interpreter specifically on missing cv2.
+                    if "No module named 'cv2'" not in last_error:
+                        break
+                if not ok:
+                    if "No module named 'cv2'" in last_error:
+                        raise RuntimeError(
+                            "Frame extraction failed: OpenCV module missing (cv2).\n\n"
+                            f"Interpreter tried: {', '.join(python_candidates)}\n"
+                            "Install it in the used environment with:\n"
+                            "pip install opencv-python numpy\n\n"
+                            f"Details:\n{last_error}"
+                        )
+                    raise RuntimeError(f"Frame extraction failed.\n\n{last_error}")
+
+                progress.setLabelText("Collecting extracted frames...")
+                progress.setRange(0, 100)
+                progress.setValue(35)
+                QApplication.processEvents()
+                frames_src = os.path.join(prepass_out, "frames")
+                if not os.path.isdir(frames_src):
+                    raise RuntimeError("No frames folder produced by prepass script.")
+
+                image_exts = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
+                frame_paths = []
+                for root, _, files in os.walk(frames_src):
+                    for fn in files:
+                        ext = os.path.splitext(fn)[1].lower()
+                        if ext in image_exts:
+                            frame_paths.append(os.path.join(root, fn))
+                frame_paths.sort()
+                if not frame_paths:
+                    raise RuntimeError("No extracted frames found for packaging.")
+
+                for idx, src in enumerate(frame_paths, start=1):
+                    dst_name = f"frame_{idx:06d}.jpg"
+                    shutil.copy2(src, os.path.join(frames_dst, dst_name))
+
+                if include_gpx:
+                    gpx_data = getattr(self.gpx_widget.gpx_list, "_gpx_data", [])
+                    if gpx_data:
+                        self._save_gpx_to_file(gpx_data, os.path.join(metadata_dst, "track.gpx"))
+
+                progress.setLabelText("Creating tar.gz package...")
+                progress.setValue(55)
+                QApplication.processEvents()
+                tar_path = os.path.join(tmpdir, f"{video_id}.tar.gz")
+                with tarfile.open(tar_path, "w:gz") as tf:
+                    tf.add(pkg_root, arcname=video_id)
+
+                progress.setLabelText("Requesting upload URL...")
+                progress.setValue(70)
+                QApplication.processEvents()
+                req_body = json.dumps({"flow": "upload_video", "video_id": video_id}).encode("utf-8")
+                req = urllib.request.Request(
+                    "https://api.geoinfer.com/v1/automations/flows",
+                    data=req_body,
+                    method="POST",
+                    headers={
+                        "X-Automation-Key": api_key,
+                        "Content-Type": "application/json",
+                        "Accept": "application/json",
+                        "User-Agent": f"KVRouite/{APP_VERSION} (+https://kvrouite.com)",
+                    },
+                )
+                try:
+                    with urllib.request.urlopen(req, timeout=30) as resp:
+                        payload = json.loads(resp.read().decode("utf-8"))
+                except urllib.error.HTTPError as e:
+                    body = ""
+                    try:
+                        body = e.read().decode("utf-8", errors="replace")
+                    except Exception:
+                        pass
+                    if e.code == 403 and "1010" in body:
+                        raise RuntimeError(
+                            "Failed to request upload URL (HTTP 403, Cloudflare 1010).\n"
+                            "Access is denied by the API edge.\n\n"
+                            "Please verify:\n"
+                            "- API key is valid and active\n"
+                            "- Your current IP is allowed (if IP allowlisting is enabled)\n"
+                            "- GeoInfer Cloudflare/WAF rules allow this client\n\n"
+                            f"Server response:\n{body}"
+                        )
+                    raise RuntimeError(f"Failed to request upload URL (HTTP {e.code}).\n{body}")
+                upload_url = payload.get("upload_url")
+                if not upload_url:
+                    raise RuntimeError("GeoInfer response did not contain upload_url.")
+
+                progress.setLabelText("Uploading package to GeoInfer...")
+                progress.setValue(85)
+                QApplication.processEvents()
+                with open(tar_path, "rb") as f:
+                    tar_blob = f.read()
+
+                # Some presigned endpoints are strict about Content-Type.
+                # Try the documented value first, then common alternatives.
+                content_type_candidates = [
+                    "application/x-tar",
+                    "application/gzip",
+                    "application/octet-stream",
+                    None,
+                ]
+                status = None
+                last_error = None
+                for ctype in content_type_candidates:
+                    headers = {}
+                    if ctype:
+                        headers["Content-Type"] = ctype
+                    put_req = urllib.request.Request(
+                        upload_url,
+                        data=tar_blob,
+                        method="PUT",
+                        headers=headers,
+                    )
+                    try:
+                        with urllib.request.urlopen(put_req, timeout=300) as put_resp:
+                            status = getattr(put_resp, "status", 200)
+                        if status == 200:
+                            last_error = None
+                            break
+                        last_error = f"Unexpected upload status {status} with Content-Type={ctype or '<none>'}"
+                    except urllib.error.HTTPError as e:
+                        body = ""
+                        try:
+                            body = e.read().decode("utf-8", errors="replace")
+                        except Exception:
+                            pass
+                        last_error = (
+                            f"HTTP {e.code} with Content-Type={ctype or '<none>'}\n"
+                            f"{body}"
+                        )
+                    except Exception as e:
+                        last_error = f"{e} (Content-Type={ctype or '<none>'})"
+
+                if status != 200:
+                    raise RuntimeError(f"Upload failed.\n\n{last_error or 'No response details.'}")
+
+                progress.setValue(100)
+                QMessageBox.information(
+                    self,
+                    "GeoInfer Upload",
+                    f"Upload successful.\n\nvideo_id: {video_id}\nframes: {len(frame_paths)}"
+                )
+        except Exception as e:
+            QMessageBox.critical(self, "GeoInfer Upload Error", str(e))
+        finally:
+            progress.close()
 
     # ---------------------------------------------------------------------
     # JSON import of coordinate proposals
