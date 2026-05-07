@@ -7497,9 +7497,19 @@ class MainWindow(QMainWindow):
                 if not frame_paths:
                     raise RuntimeError("No extracted frames found for packaging.")
 
-                for idx, src in enumerate(frame_paths, start=1):
-                    dst_name = f"frame_{idx:06d}.jpg"
-                    shutil.copy2(src, os.path.join(frames_dst, dst_name))
+                # Preserve original extracted filenames (e.g. 0000014.02_jump_before.jpg)
+                # while flattening into {video_id}/frames/.
+                used_names = set()
+                for src in frame_paths:
+                    base_name = os.path.basename(src)
+                    name, ext = os.path.splitext(base_name)
+                    candidate = base_name
+                    suffix = 1
+                    while candidate in used_names or os.path.exists(os.path.join(frames_dst, candidate)):
+                        candidate = f"{name}_{suffix}{ext}"
+                        suffix += 1
+                    used_names.add(candidate)
+                    shutil.copy2(src, os.path.join(frames_dst, candidate))
 
                 if include_gpx:
                     gpx_data = getattr(self.gpx_widget.gpx_list, "_gpx_data", [])
