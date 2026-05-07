@@ -553,7 +553,7 @@ class MainWindow(QMainWindow):
                 "gpx_video_shift": None,
                 "markB": None,
                 "markE": None,
-                "sync_enabled": False,         # per-Slot „Sync all with video“
+                "sync_enabled": True,          # per-Slot „Sync all with video“
                 "sync_marker": None,           # per-Slot „Set Sync“ (Index)
             },
             2: {
@@ -919,7 +919,7 @@ class MainWindow(QMainWindow):
         self.action_new_pts_video_time = QAction("Sync all with video", self)
         self.action_new_pts_video_time.setStatusTip("If activates we automatically sync the video to a select gpx point without using V-Sync-Button")
         self.action_new_pts_video_time.setCheckable(True)
-        self.action_new_pts_video_time.setChecked(False)  # Standard = OFF
+        self.action_new_pts_video_time.setChecked(True)   # Standard = ON (empty GPX)
         self.action_new_pts_video_time.triggered.connect(self._on_sync_point_video_time_toggled)
         setup_menu.addAction(self.action_new_pts_video_time)               
         
@@ -1379,7 +1379,6 @@ class MainWindow(QMainWindow):
         self.timeline.markerMoved.connect(self._on_timeline_marker_moved)
         self.video_control.timeHMSSetClicked.connect(self.on_time_hms_set_clicked)
         
-        self.gpx_widget.gpx_list.rowClickedInPause.connect(self._on_gpx_list_pause_clicked)
         self.map_widget.pointClickedInPause.connect(self._on_map_pause_clicked)
         
         self.gpx_control.chTimeClicked.connect(self.gpx_control.on_chTime_clicked_gpx)
@@ -2050,6 +2049,9 @@ class MainWindow(QMainWindow):
         js_bool = "true" if self._directions_enabled else "false"
         js_code = f"setDirectionsEnabled({js_bool});"
         self.map_widget.view.page().runJavaScript(js_code)
+        # Re-apply "Sync all with video" to JS after each map page load,
+        # so map-side icon/state stays consistent with the action state.
+        self._on_sync_point_video_time_toggled(self.action_new_pts_video_time.isChecked())
 
     def _apply_map_sizes_from_settings(self):
         """
@@ -2584,6 +2586,7 @@ class MainWindow(QMainWindow):
         Dadurch wird die Route – je nach gewähltem Startpunkt (B/E) – vorn oder hinten angefügt.
         """
         old_data = copy.deepcopy(self._gpx_data)
+        had_no_points_before_insert = (len(old_data) == 0)
         self._undo_stack.append(lambda: self._restore_gpx_data(old_data))
         print("[UNDO] InsertPoint => alter Zustand gesichert")
 
@@ -2766,6 +2769,24 @@ class MainWindow(QMainWindow):
         
         self.gpx_widget.set_gpx_data(gpx_data) #need to update gpx_widget data before update elevation
         self.gpx_control.update_elevation_from_opentopo([(insert_pos, lat, lon)])
+
+        # If the very first point was inserted manually while a video is loaded,
+        # treat this as establishing GPX<->video sync at current video time.
+        if (
+            had_no_points_before_insert
+            and len(gpx_data) > 0
+            and not self._autoSyncNewPointsWithVideoTime
+            and self.playlist_counter > 0
+        ):
+            try:
+                video_time = self.video_editor.get_current_position_s()
+                final_s = self.get_final_time_for_global(video_time)
+                set_gpx_video_shift(final_s)
+                # Sync baseline is now established; disable "Sync all with video"
+                # so map/video sync controls are no longer highlighted in red.
+                self._on_sync_point_video_time_toggled(False)
+            except Exception:
+                pass
 
         #  => recalc
         recalc_gpx_data(gpx_data)
@@ -3251,6 +3272,12 @@ class MainWindow(QMainWindow):
 
     def _update_gpx_overview(self):
         data = self.gpx_widget.gpx_list._gpx_data
+        # "Define GPX/video sync" button should be unavailable while no GPX exists.
+        if hasattr(self, "video_control") and hasattr(self.video_control, "set_sync_button"):
+            self.video_control.set_sync_button.setEnabled(bool(data))
+            if hasattr(self.video_control, "update_set_sync_highlight"):
+                self.video_control.update_set_sync_highlight()
+
         if not data:
             self.gpx_control.update_info_line(
                 video_time_str="00:00:00.000",  # Mit Millisekunden
@@ -3442,7 +3469,10 @@ class MainWindow(QMainWindow):
         if self.video_editor.is_playing and is_gpx_video_shift_set():
             self.map_widget.show_yellow(new_index,True)
         else:
-            self.map_widget.show_blue(new_index)
+            self.map_widget.show_blue(
+                new_index,
+                do_center=bool(self._autoSyncNewPointsWithVideoTime)
+            )
         
 
         # 3) Liste: dieselbe Zeile gelb machen
@@ -3450,6 +3480,8 @@ class MainWindow(QMainWindow):
         self.gpx_widget.gpx_list.select_row_in_pause(new_index)
         self.chart.highlight_gpx_index(new_index)
         self._sync_street_view_to_index(new_index)
+        if self._autoSyncNewPointsWithVideoTime and self.playlist_counter > 0:
+            self.on_map_sync_any()
 
 
     
@@ -4076,6 +4108,12 @@ class MainWindow(QMainWindow):
         else:
             # remember and give the hint
             self._sync_prompt_answer = False
+            # User confirmed GPX/video are not synchronized:
+            # disable "Sync all with video" mode explicitly.
+            if hasattr(self, "action_new_pts_video_time"):
+                if self.action_new_pts_video_time.isChecked():
+                    self.action_new_pts_video_time.setChecked(False)
+                self._on_sync_point_video_time_toggled(False)
             QMessageBox.information(
                 self, "Video & GPX Sync",
                 "In this case it is advised to define the sync point.\n "
@@ -5125,18 +5163,25 @@ class MainWindow(QMainWindow):
             #recalc_gpx_data(self._gpx_data) #to refresh list
             self.gpx_widget.gpx_list.set_gpx_data(self._gpx_data)
             self.video_control.activate_controls()
-            #self.enableVideoGpxSync()
-            if hasattr(self, "action_auto_sync_video"):
-                if not self.action_auto_sync_video.isChecked():
-                    self.action_auto_sync_video.setChecked(True)
-                self._on_auto_sync_video_toggled(True)
-                if hasattr(self, "video_control"):
-                    self.video_control._update_autocut_icon()
-
+            # Defining GPX/video sync must not force-enable AutoCutVideo+GPX.
+            # Force-enable only "Sync all with video", and refresh UI state.
             if hasattr(self, "action_new_pts_video_time"):
                 if not self.action_new_pts_video_time.isChecked():
                     self.action_new_pts_video_time.setChecked(True)
                 self._on_sync_point_video_time_toggled(True)
+
+            # Force AutoCutVideo+GPX only when Edit Video is enabled.
+            if (
+                hasattr(self, "action_auto_sync_video")
+                and getattr(self, "_edit_mode", "off") != "off"
+            ):
+                if not self.action_auto_sync_video.isChecked():
+                    self.action_auto_sync_video.setChecked(True)
+                self._on_auto_sync_video_toggled(True)
+
+            if hasattr(self, "video_control"):
+                self.video_control._update_autocut_icon()
+                self.video_control.update_set_sync_highlight()
             
             if(get_gpx_video_shift() < 0): # color negative points in grey
                 route_geojson = self._build_route_geojson_from_gpx(self._gpx_data)
@@ -5975,8 +6020,8 @@ class MainWindow(QMainWindow):
                 self._gpx_slots[s]["gpx_video_shift"] = None
                 self._gpx_slots[s]["markB"] = None
                 self._gpx_slots[s]["markE"] = None
-                # Werkseinstellung: Slot1 False, Slot2 True
-                self._gpx_slots[s]["sync_enabled"] = (s == 2)
+                # Werkseinstellung ohne GPX: Sync all with video ON
+                self._gpx_slots[s]["sync_enabled"] = True
             self._active_gpx_slot = 1
             self._apply_slot_to_ui()
         except Exception as e:
@@ -5995,9 +6040,9 @@ class MainWindow(QMainWindow):
                     pass
 
             if hasattr(self, "action_new_pts_video_time"):
-                self.action_new_pts_video_time.setChecked(False)
+                self.action_new_pts_video_time.setChecked(True)
                 try:
-                    self._on_sync_point_video_time_toggled(False)
+                    self._on_sync_point_video_time_toggled(True)
                 except Exception:
                     pass
             
