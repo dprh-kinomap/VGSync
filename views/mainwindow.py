@@ -1075,12 +1075,17 @@ class MainWindow(QMainWindow):
         # Fertig in den Video-Bereich
         video_area_layout.addWidget(timeline_control_widget, stretch=15)
         
-        # Alles in den oberen Teil der linken Spalte
-        self.left_v_layout.addWidget(self.video_area_widget, stretch=1)
-        
         # Unten: Map (50%)
         self.map_widget = MapWidget(mainwindow=self, parent=None)
-        self.left_v_layout.addWidget(self.map_widget, stretch=1)
+        
+        # Draggable separator between video and map
+        self.left_splitter = QSplitter(Qt.Vertical, left_column_widget)
+        self.left_splitter.addWidget(self.video_area_widget)
+        self.left_splitter.addWidget(self.map_widget)
+        self.left_splitter.setStretchFactor(0, 1)
+        self.left_splitter.setStretchFactor(1, 1)
+        self.left_splitter.setSizes([500, 500])  # default: 50/50 like before
+        self.left_v_layout.addWidget(self.left_splitter)
         
         # ============== Rechte Spalte (Chart + GPX) ==============
         #
@@ -1097,7 +1102,6 @@ class MainWindow(QMainWindow):
         self.right_top_view_tabs.addTab("Street View")
         self.right_top_view_tabs.currentChanged.connect(self._on_right_top_view_tab_changed)
         right_top_tabs_row.addWidget(self.right_top_view_tabs)
-        self.right_v_layout.addLayout(right_top_tabs_row)
         
         # Oben: Chart (40%) => Stretch 2
         self.chart = ChartWidget()
@@ -1125,7 +1129,12 @@ class MainWindow(QMainWindow):
         self.street_view_view.loadFinished.connect(self._on_street_view_page_loaded)
         self.right_top_stack.addWidget(self.street_view_widget)
 
-        self.right_v_layout.addWidget(self.right_top_stack, stretch=2)
+        self.right_top_widget = QWidget()
+        self.right_top_layout = QVBoxLayout(self.right_top_widget)
+        self.right_top_layout.setContentsMargins(0, 0, 0, 0)
+        self.right_top_layout.setSpacing(0)
+        self.right_top_layout.addLayout(right_top_tabs_row)
+        self.right_top_layout.addWidget(self.right_top_stack)
         self._street_view_sync_timer = QTimer(self)
         self._street_view_sync_timer.setInterval(400)
         self._street_view_sync_timer.timeout.connect(self._mirror_street_view_marker_to_left_map)
@@ -1202,7 +1211,15 @@ class MainWindow(QMainWindow):
 
         
         self.bottom_right_layout.addWidget(self.gpx_widget, stretch=5)
-        self.right_v_layout.addWidget(self.bottom_right_widget, stretch=3)
+
+        # Draggable separator between chart/street-view and GPX section
+        self.right_splitter = QSplitter(Qt.Vertical, right_column_widget)
+        self.right_splitter.addWidget(self.right_top_widget)
+        self.right_splitter.addWidget(self.bottom_right_widget)
+        self.right_splitter.setStretchFactor(0, 2)
+        self.right_splitter.setStretchFactor(1, 3)
+        self.right_splitter.setSizes([400, 600])  # default: ~40/60 like before
+        self.right_v_layout.addWidget(self.right_splitter)
         self.right_top_view_tabs.setCurrentIndex(0)
         
         #

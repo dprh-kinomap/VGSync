@@ -2656,7 +2656,7 @@ class GPXControlWidget(QWidget):
             # => Directions=True => zeige Profil-Auswahl (QDialog)
             #    Dann rufe _close_gaps_mapbox(..., profile)
             #    Du kannst standard=cycling, optional=driving/walking
-            prof = self._ask_profile_mode()
+            prof = self._ask_profile_mode(getattr(mw.map_widget, "_curr_mapbox_profile", None))
             if not prof:
                 # Abbruch
                 return
@@ -2664,7 +2664,7 @@ class GPXControlWidget(QWidget):
             # Rufe neue Methode
             self._close_gaps_mapbox(b_idx, e_idx, dt, prof)
 
-    def _ask_profile_mode(self) -> str:
+    def _ask_profile_mode(self, default_profile: str = None) -> str:
         """
         Zeigt einen kleinen Dialog mit RadioButtons:
         Bike (cycling), Car (driving), Foot (walking).
@@ -2678,10 +2678,15 @@ class GPXControlWidget(QWidget):
         vbox.addWidget(lbl)
     
         group = QButtonGroup(dlg)
-        rb_bike = QRadioButton("Bike (Default)")
+        rb_bike = QRadioButton("Bike")
         rb_car  = QRadioButton("Car")
         rb_walk = QRadioButton("Foot")
-        rb_bike.setChecked(True)
+        if default_profile == "driving":
+            rb_car.setChecked(True)
+        elif default_profile == "walking":
+            rb_walk.setChecked(True)
+        else:
+            rb_bike.setChecked(True)
         group.addButton(rb_bike)
         group.addButton(rb_car)
         group.addButton(rb_walk)

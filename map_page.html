@@ -1908,6 +1908,10 @@
     // Function to initialize Mapillary Viewer
     function navigateStreetView(lat, lon) {
       pyLog("navigateStreetView lat: "+lat+" lon: "+lon);
+      if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
+        console.warn("navigateStreetView called with invalid coords:", lat, lon);
+        return;
+      }
       if (currentStreetViewMode === "google") {
         ensureGoogleMapsApiLoaded()
           .then(() => {
@@ -1936,7 +1940,19 @@
               { location: latLng, radius: 50 },
               (data, status) => {
                 if (status === google.maps.StreetViewStatus.OK && data && data.location && data.location.latLng) {
-                  googleStreetViewPanorama.setPosition(data.location.latLng);
+                  // In some Chromium/WebEngine + Maps JS combinations, setPosition()
+                  // can throw internal minified errors for specific panoramas.
+                  // Fallback to pano-id based navigation to keep Street View usable.
+                  try {
+                    googleStreetViewPanorama.setPosition(data.location.latLng);
+                  } catch (e) {
+                    console.warn("StreetView setPosition failed, fallback to setPano:", e);
+                    if (data.location && data.location.pano) {
+                      googleStreetViewPanorama.setPano(data.location.pano);
+                    } else {
+                      throw e;
+                    }
+                  }
                   googleStreetViewPanorama.setVisible(true);
                   streetCoords = [data.location.latLng.lng(), data.location.latLng.lat()];
                   drawMapillaryCrossMarker(streetCoords[0], streetCoords[1]);
