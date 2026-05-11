@@ -7269,12 +7269,7 @@ class MainWindow(QMainWindow):
         # Dateiendung bestimmen
         file_ext = file_path.lower()
 
-        # JSON → direkt an den Geoinfer/Proposals-Importer delegieren
-        if file_ext.endswith(".json"):
-            self.import_proposals_json(file_path)
-            return
-
-        # GPX/FIT → wie bisher: ggf. nach New/Append fragen
+        # GPX/FIT/JSON → ggf. nach New/Append fragen
         if self._gpx_data:
             msg_box = QMessageBox(self)
             msg_box.setWindowTitle("Load Track File")
@@ -7299,7 +7294,9 @@ class MainWindow(QMainWindow):
             mode = "new"
 
         try:
-            if file_ext.endswith(".gpx"):
+            if file_ext.endswith(".json"):
+                self.import_proposals_json(file_path, mode=mode)
+            elif file_ext.endswith(".gpx"):
                 self.process_open_gpx(file_path, mode)
             elif file_ext.endswith(".fit"):
                 self.process_open_fit(file_path, mode)
@@ -7329,12 +7326,13 @@ class MainWindow(QMainWindow):
     # ---------------------------------------------------------------------
     # JSON import of coordinate proposals
     # ---------------------------------------------------------------------
-    def import_proposals_json(self, file_path=None):
+    def import_proposals_json(self, file_path=None, mode=None):
         """Loads the JSON array produced by the proposal tool, converts each entry
-        into a GPX point and appends them to the current track (or starts a new
-        track if none exist).
+        into GPX points and imports them as a new track or appends them.
 
         If ``file_path`` is None, a file dialog is shown to select the JSON file.
+        If ``mode`` is None, defaults to ``append`` when a track is loaded,
+        otherwise ``new``.
         """
         from PySide6.QtWidgets import QFileDialog
 
@@ -7830,14 +7828,58 @@ class MainWindow(QMainWindow):
                 else:
                     print()
 
-        if getattr(self, "_gpx_data", None):
-            # append
+        if mode not in ("new", "append"):
+            if getattr(self, "_gpx_data", None):
+                msg_box = QMessageBox(self)
+                msg_box.setWindowTitle("Import Proposals")
+                msg_box.setText(
+                    "A track is already loaded.\n"
+                    "Do you want to start a new track or append the imported JSON?"
+                )
+                new_btn = msg_box.addButton("New", QMessageBox.AcceptRole)
+                append_btn = msg_box.addButton("Append", QMessageBox.YesRole)
+                cancel_btn = msg_box.addButton("Cancel", QMessageBox.RejectRole)
+
+                msg_box.exec()
+                clicked = msg_box.clickedButton()
+                if clicked == cancel_btn:
+                    return
+                elif clicked == new_btn:
+                    mode = "new"
+                    self._sync_prompt_answer = None
+                else:
+                    mode = "append"
+            else:
+                mode = "new"
+
+        if mode == "append" and getattr(self, "_gpx_data", None):
             self._gpx_data.extend(pts)
         else:
             self._gpx_data = pts
 
         # keep the track sorted by time
-        self._gpx_data.sort(key=lambda p: p.get("time", _dt.datetime.min))
+        # Normalize mixed naive/aware timestamps to UTC-aware datetimes
+        # so Python can compare them safely during sorting.
+        def _proposal_time_sort_key(point):
+            t = point.get("time")
+            if isinstance(t, _dt.datetime):
+                if t.tzinfo is None:
+                    return t.replace(tzinfo=_dt.timezone.utc)
+                return t.astimezone(_dt.timezone.utc)
+            return _dt.datetime.min.replace(tzinfo=_dt.timezone.utc)
+
+        self._gpx_data.sort(key=_proposal_time_sort_key)
+
+        # Ensure downstream code only sees UTC-aware datetimes.
+        # recalc_gpx_data() subtracts consecutive times and will fail on mixed
+        # naive/aware values.
+        for p in self._gpx_data:
+            t = p.get("time")
+            if isinstance(t, _dt.datetime):
+                if t.tzinfo is None:
+                    p["time"] = t.replace(tzinfo=_dt.timezone.utc)
+                else:
+                    p["time"] = t.astimezone(_dt.timezone.utc)
 
         # strip our temporary confidence field (not needed downstream)
         for p in self._gpx_data:
