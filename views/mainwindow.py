@@ -4093,6 +4093,10 @@ class MainWindow(QMainWindow):
         if not (self._gpx_data and self.playlist_counter > 0):
             return
 
+        # don't ask if a GPX/video shift is already defined
+        if is_gpx_video_shift_set():
+            return
+
         # if last GPX operation was an append => never ask here
         if getattr(self, "_last_gpx_load_mode", None) == "append":
             return
