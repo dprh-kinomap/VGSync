@@ -1559,6 +1559,53 @@ class MainWindow(QMainWindow):
             return
 
         query = query.strip()
+        # Detect direct coordinate input (e.g. "48.123, 11.456" or a list of such pairs)
+        try:
+            coord_pairs = re.findall(r"(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)", query)
+            pts = []
+            for lat_s, lon_s in coord_pairs:
+                try:
+                    lat = float(lat_s)
+                    lon = float(lon_s)
+                except Exception:
+                    continue
+                if -90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0:
+                    pts.append({"lat": lat, "lon": lon, "ele": 0.0, "time": None})
+
+            # If multiple coordinate pairs were provided, import as GPX track
+            if len(pts) >= 2:
+                from core.gpx_parser import recalc_gpx_data
+                recalc_gpx_data(pts)
+                # place into slot 1 (consistent with other GPX loads)
+                try:
+                    self._gpx_slots[1]["gpx_data"] = pts
+                    self._gpx_slots[1]["gpx_video_shift"] = None
+                    self._gpx_slots[1]["markB"] = None
+                    self._gpx_slots[1]["markE"] = None
+                    self._last_gpx_load_mode = "new"
+                    if self._active_gpx_slot == 1:
+                        self._apply_slot_to_ui()
+                    else:
+                        self.switch_gpx_slot(1)
+                except Exception:
+                    # fallback: directly integrate into UI
+                    try:
+                        self._set_gpx_data(pts)
+                    except Exception:
+                        pass
+
+                QMessageBox.information(self, "Import coordinates", f"Imported {len(pts)} coordinate points as GPX.")
+                return
+
+            # Single coordinate pair -> act like a normal location center
+            if len(pts) == 1:
+                lat = pts[0]["lat"]
+                lon = pts[0]["lon"]
+                if self.map_widget:
+                    self.map_widget.center_on_location(lat, lon, zoom=15)
+                return
+        except Exception:
+            pass
         results = []
         try:
             # First try standard search
