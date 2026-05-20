@@ -1824,6 +1824,14 @@ class GPXControlWidget(QWidget):
             for i in range(cur_start, cur_end + 1):
                 gpx_data[i]["ele"] = float(gpx_data[i].get("ele", 0.0)) + delta
 
+        # --- Normalize elevation: if any values are negative, shift all values up so minimum is 0 ---
+        all_elevations = [float(pt.get("ele", 0.0)) for pt in gpx_data]
+        min_elevation = min(all_elevations)
+        if min_elevation < 0:
+            offset = -min_elevation  # shift up by the absolute value of the minimum
+            for pt in gpx_data:
+                pt["ele"] = float(pt.get("ele", 0.0)) + offset
+
     # ===========  NEU am Ende von mainwindow.py ============    
     
     
