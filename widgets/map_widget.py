@@ -1,21 +1,21 @@
 # -*- coding: utf-8 -*-
 #
-# This file is part of KVRouite.
+# This file is part of VGSync.
 #
 # Copyright (C) 2025 by Bernd Eller
 #
-# KVRouite is free software: you can redistribute it and/or modify
+# VGSync is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
 # the Free Software Foundation, either version 3 of the License, or
 # (at your option) any later version.
 #
-# KVRouite is distributed in the hope that it will be useful,
+# VGSync is distributed in the hope that it will be useful,
 # but WITHOUT ANY WARRANTY; without even the implied warranty of
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
 # See the GNU General Public License for more details.
 #
 # You should have received a copy of the GNU General Public License
-# along with KVRouite. If not, see <https://www.gnu.org/licenses/>.
+# along with VGSync. If not, see <https://www.gnu.org/licenses/>.
 #
 
 import os
@@ -342,7 +342,23 @@ class MapWidget(QWidget):
         do_center_str = "true" if do_center else "false"
     
         js_code = (
-            f"highlightPoint({index}, '{color}', {size_str}, {do_center_str});"
+            # Prefer using highlightPoint if available; otherwise fallback to
+            # directly centering on the feature when do_center is true.
+            f"(function(){{\n"
+            f"  if (typeof highlightPoint === 'function') {{\n"
+            f"    try {{ highlightPoint({index}, '{color}', {size_str}, {do_center_str}); }} catch(e) {{ console.error('highlightPoint error', e); }}\n"
+            f"    return;\n"
+            f"  }}\n"
+            f"  // Fallback: try to find feature and center map if requested\n"
+            f"  try {{\n"
+            f"    var f = (typeof featuresMapIndex !== 'undefined') ? featuresMapIndex[{index}] : null;\n"
+            f"    if (f) {{ f.set && f.set('color', '{color}'); if (typeof {size_str} === 'number') f.set('size', {size_str}); else f.unset && f.unset('size'); }}\n"
+            f"    if ({do_center_str}) {{\n"
+            f"      var coords = f && f.getGeometry ? f.getGeometry().getCoordinates() : null;\n"
+            f"      if (coords && map && map.getView) map.getView().animate({{center: coords, duration: 600}});\n"
+            f"    }}\n"
+            f"  }} catch(e) {{ console.error('map fallback error', e); }}\n"
+            f"}})();"
         )
         self.view.page().runJavaScript(js_code)
 
@@ -402,6 +418,27 @@ class MapWidget(QWidget):
         # Neuer Index => 'yellow'
         self._yellow_idx = index
         self._color_point(index, "yellow", None, do_center)
+
+    def center_on_index(self, index: int, zoom: int = 15) -> bool:
+        """Center the map on the GPX point at `index` using stored GPX coords.
+        Returns True if centering JS was requested, False otherwise.
+        """
+        try:
+            gpx_data = getattr(self._mainwindow, "_gpx_data", None)
+            if not gpx_data or index < 0 or index >= len(gpx_data):
+                return False
+            pt = gpx_data[index]
+            lat = pt.get("lat")
+            lon = pt.get("lon")
+            if lat is None or lon is None:
+                return False
+            # Use the JS helper centerMap(lat, lon, zoomLevel)
+            js = f"centerMap({lat}, {lon}, {zoom});"
+            self.view.page().runJavaScript(js)
+            return True
+        except Exception as e:
+            print(f"[WARN] center_on_index failed: {e}")
+            return False
 
     
 

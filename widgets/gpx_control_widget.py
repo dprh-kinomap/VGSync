@@ -1,21 +1,21 @@
 # -*- coding: utf-8 -*-
 #
-# This file is part of KVRouite.
+# This file is part of VGSync.
 #
 # Copyright (C) 2025 by Bernd Eller
 #
-# KVRouite is free software: you can redistribute it and/or modify
+# VGSync is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
 # the Free Software Foundation, either version 3 of the License, or
 # (at your option) any later version.
 #
-# KVRouite is distributed in the hope that it will be useful,
+# VGSync is distributed in the hope that it will be useful,
 # but WITHOUT ANY WARRANTY; without even the implied warranty of
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
 # See the GNU General Public License for more details.
 #
 # You should have received a copy of the GNU General Public License
-# along with KVRouite. If not, see <https://www.gnu.org/licenses/>.
+# along with VGSync. If not, see <https://www.gnu.org/licenses/>.
 #
 
 # gpx_control_widget.py 
@@ -263,7 +263,7 @@ class GPXControlWidget(QWidget):
             # 1) PyInstaller-Bundle
             if hasattr(sys, "_MEIPASS"):
                 candidates.append(Path(sys._MEIPASS) / "icon" / "target.png")
-            # 2) Laufzeit-/EXE-Ordner (auch bei "python KVRouite.py")
+            # 2) Laufzeit-/EXE-Ordner (auch bei "python VGSync.py")
             candidates.append(Path(os.path.abspath(os.path.dirname(sys.argv[0]))) / "icon" / "target.png")
             # 3) Repo-Layout relativ zu dieser Datei
             here = Path(__file__).resolve()

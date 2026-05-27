@@ -1,21 +1,21 @@
 # -*- coding: utf-8 -*-
 #
-# This file is part of KVRouite.
+# This file is part of VGSync.
 #
 # Copyright (C) 2025 by Bernd Eller
 #
-# KVRouite is free software: you can redistribute it and/or modify
+# VGSync is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
 # the Free Software Foundation, either version 3 of the License, or
 # (at your option) any later version.
 #
-# KVRouite is distributed in the hope that it will be useful,
+# VGSync is distributed in the hope that it will be useful,
 # but WITHOUT ANY WARRANTY; without even the implied warranty of
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
 # See the GNU General Public License for more details.
 #
 # You should have received a copy of the GNU General Public License
-# along with KVRouite. If not, see <https://www.gnu.org/licenses/>.
+# along with VGSync. If not, see <https://www.gnu.org/licenses/>.
 #
 # config.py
 
@@ -26,11 +26,28 @@ import tempfile
 import shutil
 from PySide6.QtCore import QSettings
 
+
+def migrate_settings_from_kvrouite() -> None:
+    """One-time copy of QSettings from legacy KVRouite org to VGSync."""
+    old = QSettings("KVRouite", "KVRouite")
+    new = QSettings("VGSync", "VGSync")
+    if new.value("settings/migrated_from_kvrouite", False, type=bool):
+        return
+    if not old.allKeys():
+        new.setValue("settings/migrated_from_kvrouite", True)
+        return
+    for key in old.allKeys():
+        if not new.contains(key):
+            new.setValue(key, old.value(key))
+    new.setValue("settings/migrated_from_kvrouite", True)
+    new.sync()
+
+
 ##############################################################################
 # 1) Versions-Konfiguration & Modus
 ##############################################################################
 
-APP_VERSION = "4.31" 
+APP_VERSION = "5.0" 
 # use 4.30_pre for a pre Version
 
 
@@ -75,23 +92,23 @@ def _get_app_base_dir() -> str:
 
 # Temp-Ordner
 base_temp = tempfile.gettempdir()
-TMP_KEYFRAME_DIR = os.path.join(base_temp, "my_KVRouite_keyframes")
+TMP_KEYFRAME_DIR = os.path.join(base_temp, "my_VGSync_keyframes")
 
 def get_temp_segments_dir() -> str:
     """
     Gibt den konfigurierten Temp-Ordner zurück, falls gesetzt,
     sonst ein systemweites Standard-Temp-Verzeichnis mit Unterordner.
     """
-    s = QSettings("KVRouite", "KVRouite")
+    s = QSettings("VGSync", "VGSync")
     custom_path = s.value("tempSegmentsDir", "", str)
 
     if custom_path and os.path.isdir(custom_path):
         return custom_path
 
     # OS-standard Temp-Verzeichnis + Unterordner
-    return os.path.join(tempfile.gettempdir(), "my_KVRouite_cut_segments")
+    return os.path.join(tempfile.gettempdir(), "my_VGSync_cut_segments")
 
-#MY_GLOBAL_TMP_DIR = os.path.join(base_temp, "my_KVRouite_cut_segments")
+#MY_GLOBAL_TMP_DIR = os.path.join(base_temp, "my_VGSync_cut_segments")
 
 MY_GLOBAL_TMP_DIR = get_temp_segments_dir()
 
@@ -107,10 +124,10 @@ LOCAL_VERSION = ""
 
 def is_disclaimer_accepted() -> bool:
     """
-    Liest aus QSettings (Firma=KVRouite, App=KVRouite) den Bool-Wert 'disclaimerAccepted'.
+    Liest aus QSettings (Firma=VGSync, App=VGSync) den Bool-Wert 'disclaimerAccepted'.
     Default = False, falls nicht vorhanden.
     """
-    s = QSettings("KVRouite", "KVRouite")
+    s = QSettings("VGSync", "VGSync")
     val = s.value("disclaimerAccepted", False, type=bool)
     return val
 
@@ -119,7 +136,7 @@ def set_disclaimer_accepted():
     """
     Setzt in QSettings => 'disclaimerAccepted' = True.
     """
-    s = QSettings("KVRouite", "KVRouite")
+    s = QSettings("VGSync", "VGSync")
     s.setValue("disclaimerAccepted", True)
 
 
@@ -128,7 +145,7 @@ def reset_config():
     Löscht alle in QSettings gespeicherten Werte
     (z. B. disclaimersAccepted, maptilerKey, etc.).
     """
-    s = QSettings("KVRouite", "KVRouite")
+    s = QSettings("VGSync", "VGSync")
     s.clear()
 
 
@@ -136,7 +153,7 @@ def is_edit_video_enabled() -> bool:
     """
     Beispiel-Funktion: Liest aus QSettings, ob 'video/editEnabled' True/False ist.
     """
-    s = QSettings("KVRouite", "KVRouite")
+    s = QSettings("VGSync", "VGSync")
     val = s.value("video/editEnabled", False, type=bool)
     return val
 
@@ -149,7 +166,7 @@ def check_app_version_and_reset_if_necessary():
 
     Gibt True zurück, wenn der Disclaimer neu gezeigt werden muss, sonst False.
     """
-    s = QSettings("KVRouite", "KVRouite")
+    s = QSettings("VGSync", "VGSync")
     stored_version = s.value("appVersion", "", type=str)
     if stored_version != APP_VERSION:
         s.setValue("appVersion", APP_VERSION)
@@ -172,7 +189,7 @@ def clear_temp_directories():
 
 
 def is_soft_opengl_enabled():
-    s = QSettings("KVRouite", "KVRouite")
+    s = QSettings("VGSync", "VGSync")
     if s.contains("use_soft_opengl"):
         return s.value("use_soft_opengl", False, type=bool)
     else:

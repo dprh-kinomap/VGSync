@@ -1,21 +1,21 @@
 # -*- coding: utf-8 -*-
 #
-# This file is part of KVRouite.
+# This file is part of VGSync.
 #
 # Copyright (C) 2025 by Bernd Eller
 #
-# KVRouite is free software: you can redistribute it and/or modify
+# VGSync is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
 # the Free Software Foundation, either version 3 of the License, or
 # (at your option) any later version.
 #
-# KVRouite is distributed in the hope that it will be useful,
+# VGSync is distributed in the hope that it will be useful,
 # but WITHOUT ANY WARRANTY; without even the implied warranty of
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
 # See the GNU General Public License for more details.
 #
 # You should have received a copy of the GNU General Public License
-# along with KVRouite. If not, see <https://www.gnu.org/licenses/>.
+# along with VGSync. If not, see <https://www.gnu.org/licenses/>.
 #
 
 """
@@ -681,8 +681,20 @@ class VideoEditorWidget(QWidget):
         Beispiel: wenn wir im 2. Clip sind, der erste Clip war 60s lang 
         und im 2. Clip sind wir gerade bei Sekunde 10 => Rückgabe = 70.
         """
-        clipIndex = self._player.playlist_pos  # python-mpv property
-        local_s   = self._player.time_pos or 0.0
+        try:
+            clipIndex = self._player.playlist_pos  # python-mpv property
+            local_s   = self._player.time_pos or 0.0
+        except Exception as e:
+            try:
+                import mpv
+                if isinstance(e, mpv.ShutdownError):
+                    print("[WARN] mpv core shutdown while reading time/properties")
+                    return 0.0
+            except Exception:
+                pass
+            # Generic fallback when property access fails
+            print(f"[WARN] Failed to read mpv properties: {e}")
+            return 0.0
         if clipIndex is None or clipIndex < 0:
             return 0.0
 

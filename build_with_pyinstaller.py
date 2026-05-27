@@ -1,21 +1,21 @@
 # -*- coding: utf-8 -*-
 #
-# This file is part of KVRouite.
+# This file is part of VGSync.
 #
 # Copyright (C) 2025 by Bernd Eller
 #
-# KVRouite is free software: you can redistribute it and/or modify
+# VGSync is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
 # the Free Software Foundation, either version 3 of the License, or
 # (at your option) any later version.
 #
-# KVRouite is distributed in the hope that it will be useful,
+# VGSync is distributed in the hope that it will be useful,
 # but WITHOUT ANY WARRANTY; without even the implied warranty of
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
 # See the GNU General Public License for more details.
 #
 # You should have received a copy of the GNU General Public License
-# along with KVRouite. If not, see <https://www.gnu.org/licenses/>.
+# along with VGSync. If not, see <https://www.gnu.org/licenses/>.
 
 
 #
@@ -82,7 +82,7 @@ def ensure_license_txt():
         return None
 
     header = (
-        "KVRouite – License & Disclaimer\n"
+        "VGSync – License & Disclaimer\n"
         "---------------------------------\n"
         "This software is distributed under the terms of the GNU GPL v3 (or later).\n"
         "By continuing, you agree to the license conditions below.\n\n"
@@ -157,11 +157,11 @@ def build_windows(build_setup: bool = False, onefile: bool = False, bundle_env: 
     print(f"[INFO] APP_VERSION: {app_version}")
 
     # ---------------- Basis/Ordner ----------------
-    artifacts_root = os.path.join("dist", f"KVRouite_{app_version}")     # dist/KVRouite_<ver>
+    artifacts_root = os.path.join("dist", f"VGSync_{app_version}")     # dist/VGSync_<ver>
     os.makedirs(artifacts_root, exist_ok=True)
 
     exe_name_tmp = "KVRTmp"     # temporärer PyInstaller-Ordnername
-    main_script  = "KVRouite.py"
+    main_script  = "VGSync.py"
 
     icon_file = os.path.join(BASE_DIR, "icon_icon.ico")
     if os.path.isfile(icon_file):
@@ -200,12 +200,12 @@ def build_windows(build_setup: bool = False, onefile: bool = False, bundle_env: 
     if not os.path.isfile(exe_path):
         raise RuntimeError(f"[ERROR] {exe_name_tmp}.exe fehlt in {artifacts_root if onefile else pyi_out_dir} – PyInstaller-Build fehlgeschlagen.")
 
-    target_dirname = f"KVRouite_{app_version}"
-    target_dir     = os.path.join(artifacts_root, target_dirname)          # dist/KVRouite_<ver>/KVRouite_<ver>
+    target_dirname = f"VGSync_{app_version}"
+    target_dir     = os.path.join(artifacts_root, target_dirname)          # dist/VGSync_<ver>/VGSync_<ver>
     os.makedirs(target_dir, exist_ok=True)
 
-    # EXE umbenennen auf KVRouite.exe (neben den restlichen Dateien)
-    new_exe_path = os.path.join(target_dir, "KVRouite.exe")
+    # EXE umbenennen auf VGSync.exe (neben den restlichen Dateien)
+    new_exe_path = os.path.join(target_dir, "VGSync.exe")
     print(f"[MOVE] {exe_path} -> {new_exe_path}")
     shutil.move(exe_path, new_exe_path)
 
@@ -276,7 +276,7 @@ def build_windows(build_setup: bool = False, onefile: bool = False, bundle_env: 
         ]
         src = next((p for p in candidates if os.path.isfile(p)), None)
         if src:
-            dst = os.path.join(target_dir, name)  # neben KVRouite.exe
+            dst = os.path.join(target_dir, name)  # neben VGSync.exe
             os.makedirs(os.path.dirname(dst), exist_ok=True)
             print("[COPY]", src, "->", dst)
             shutil.copy2(src, dst)
@@ -303,18 +303,18 @@ def build_windows(build_setup: bool = False, onefile: bool = False, bundle_env: 
 
 
     print(f"[INFO] PyInstaller-Struktur OK: {os.path.abspath(target_dir)}")
-    print("[INFO] Enthält: KVRouite.exe, ol.css, ol.js, map_page.html, icon/, _internal/…")
+    print("[INFO] Enthält: VGSync.exe, ol.css, ol.js, map_page.html, icon/, _internal/…")
 
     # ---------------- portable ZIP + SHA ----------------
     ARCH_SUFFIX = "Win_x64"
-    zip_name_wo_ext = f"KVRouite_{app_version}_{ARCH_SUFFIX}"
+    zip_name_wo_ext = f"VGSync_{app_version}_{ARCH_SUFFIX}"
     zip_base = os.path.join(artifacts_root, zip_name_wo_ext)
     print(f"[INFO] Erzeuge ZIP → {zip_base}.zip (Inhalt = {target_dirname}/)")
     zip_path = shutil.make_archive(
         base_name=zip_base,
         format="zip",
         root_dir=artifacts_root,      # Top ist artifacts_root
-        base_dir=target_dirname       # wir packen den Ordner KVRouite_<ver> hinein
+        base_dir=target_dirname       # wir packen den Ordner VGSync_<ver> hinein
     )
     print("[INFO] ZIP erstellt:", zip_path)
     write_sha256(zip_path)
@@ -334,9 +334,9 @@ def build_windows(build_setup: bool = False, onefile: bool = False, bundle_env: 
             print("[ERROR] ISCC.exe nicht gefunden. Setze ENV ISCC oder installiere Inno Setup 6.")
             sys.exit(2)
 
-        iss_file = os.path.join(BASE_DIR, "installer", "KVRouite.iss")
+        iss_file = os.path.join(BASE_DIR, "installer", "VGSync.iss")
         if not os.path.isfile(iss_file):
-            print("[ERROR] installer\\KVRouite.iss fehlt – kann Installer nicht bauen.")
+            print("[ERROR] installer\\VGSync.iss fehlt – kann Installer nicht bauen.")
             sys.exit(2)
 
         icon_in_dist = os.path.join(target_dir, "icon", "icon_icon.ico")
@@ -372,7 +372,7 @@ def build_windows(build_setup: bool = False, onefile: bool = False, bundle_env: 
         print("[RUN] ISCC → OutputDir =", os.path.abspath(artifacts_root))
         subprocess.run([iscc, "/O" + os.path.abspath(artifacts_root)] + defines + [iss_file], check=True)
 
-        installer_path = os.path.join(artifacts_root, f"KVRouite_v{app_version}_Win_x64_Installer.exe")
+        installer_path = os.path.join(artifacts_root, f"VGSync_v{app_version}_Win_x64_Installer.exe")
         if os.path.isfile(installer_path):
             print("[INFO] Installer erstellt:", installer_path)
             write_sha256(installer_path)
@@ -387,9 +387,9 @@ def build_windows(build_setup: bool = False, onefile: bool = False, bundle_env: 
     print()
     print(f"[INFO] Fertig. Alles liegt in: {os.path.abspath(artifacts_root)}")
     print(f"[INFO] - Ordner: {target_dirname}\\")
-    print(f"[INFO] - ZIP   : KVRouite_{app_version}_Win_x64.zip (+ .sha256)")
+    print(f"[INFO] - ZIP   : VGSync_{app_version}_Win_x64.zip (+ .sha256)")
     if build_setup:
-        print(f"[INFO] - SETUP : KVRouite_Setup_v{app_version}_Win_x64.exe (+ .sha256)")
+        print(f"[INFO] - SETUP : VGSync_Setup_v{app_version}_Win_x64.exe (+ .sha256)")
 
 
 

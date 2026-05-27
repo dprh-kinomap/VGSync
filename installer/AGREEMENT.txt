@@ -1,7 +1,8 @@
-KVRouite – End-User Agreement & Disclaimer
+VGSync – End-User Agreement & Disclaimer
 ==========================================
 
-Copyright (C) 2025  Bernd Eller
+Copyright (C) 2025 Bernd Eller
+Copyright (C) 2026 Kinomap
 
 This program is free software: you can redistribute it and/or modify it under
 the terms of the GNU General Public License as published by the Free Software

@@ -1,21 +1,21 @@
 # -*- coding: utf-8 -*-
 #
-# This file is part of KVRouite.
+# This file is part of VGSync.
 #
 # Copyright (C) 2025 by Bernd Eller
 #
-# KVRouite is free software: you can redistribute it and/or modify
+# VGSync is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
 # the Free Software Foundation, either version 3 of the License, or
 # (at your option) any later version.
 #
-# KVRouite is distributed in the hope that it will be useful,
+# VGSync is distributed in the hope that it will be useful,
 # but WITHOUT ANY WARRANTY; without even the implied warranty of
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
 # See the GNU General Public License for more details.
 #
 # You should have received a copy of the GNU General Public License
-# along with KVRouite. If not, see <https://www.gnu.org/licenses/>.
+# along with VGSync. If not, see <https://www.gnu.org/licenses/>.
 #
 
 # core/gpx_parser.py
@@ -565,6 +565,18 @@ def clamp_crf(crf_val):
     if crf_val>51: crf_val=51
     return crf_val
 
+
+def _apply_bitrate_flags(cmd, bitrate_mbps, bitrate_mode="vbr"):
+    """Appends ffmpeg bitrate args for CBR/VBR."""
+    if not bitrate_mbps:
+        return
+    br = f"{bitrate_mbps}M"
+    bitrate_mode = (bitrate_mode or "vbr").lower()
+    if bitrate_mode == "cbr":
+        cmd += ["-b:v", br, "-minrate", br, "-maxrate", br, "-bufsize", f"{bitrate_mbps * 2}M"]
+    else:
+        cmd += ["-b:v", br, "-maxrate", br, "-bufsize", f"{bitrate_mbps * 2}M"]
+
 ###############################################################################
 # 6) SCALE-FILTER
 ###############################################################################
@@ -587,7 +599,9 @@ def encode_closedgop(
     crf=None,       # read from config; no default 12
     width=None,
     preset=None,
-    bitrate_mbps=None
+    bitrate_mbps=None,
+    rc_mode="crf",
+    bitrate_mode="vbr"
 ):
     enc_name, mode = determine_encoder(encoder, hw_encode)
     real_preset = preset
@@ -600,42 +614,53 @@ def encode_closedgop(
         "ffmpeg","-hide_banner","-y",
         "-f","concat","-safe","0",
         "-i", concat_file,
-        "-an"
+        # keep audio streams (copy) instead of disabling audio
     ]
 
     # if user didn't specify => fallback?
     if crf is None:
         crf=23  # or 25 ?
+    if bitrate_mbps is None:
+        bitrate_mbps = 20
+    rc_mode = (rc_mode or "crf").lower()
+    bitrate_mode = (bitrate_mode or "vbr").lower()
 
     if mode=="cpu":
-        # => real CRF
+        # CPU: apply exactly one selected control mode
         p_extra= get_cpu_closedgop_params(enc_name)
-        cmd+= ["-c:v", enc_name, "-crf", str(crf)]
-        if real_preset:
+        cmd+= ["-c:v", enc_name]
+        if rc_mode == "bitrate":
+            _apply_bitrate_flags(cmd, bitrate_mbps, bitrate_mode)
+        elif rc_mode == "preset":
+            pass
+        else:
+            cmd += ["-crf", str(crf)]
+        if rc_mode == "preset" and real_preset:
             cmd+= ["-preset", real_preset]
         cmd+= p_extra
-        if bitrate_mbps:
-            br = f"{bitrate_mbps}M"
-            cmd += ["-b:v", br, "-maxrate", br, "-bufsize", f"{bitrate_mbps * 2}M"]
-        print(f"[DEBUG] CPU => CRF={crf}")
+        print(f"[DEBUG] CPU rate-control => mode={rc_mode}")
         
         
 
     else:
-        # => GPU => pseudo CRF => vbr_hq + -cq
-        # clamp 0..51
-        qv= clamp_crf(crf)
+        # GPU: apply exactly one selected control mode
         p_extra= get_gpu_closedgop_params(hw_encode)
-        cmd+=["-c:v", enc_name,
-              "-rc:v","vbr_hq",
-              "-cq", str(qv)]
-        if real_preset:
+        cmd+=["-c:v", enc_name]
+        if rc_mode == "bitrate":
+            if bitrate_mode == "cbr":
+                cmd += ["-rc:v", "cbr"]
+            else:
+                cmd += ["-rc:v", "vbr_hq"]
+            _apply_bitrate_flags(cmd, bitrate_mbps, bitrate_mode)
+        elif rc_mode == "preset":
+            pass
+        else:
+            qv= clamp_crf(crf)
+            cmd += ["-rc:v", "vbr_hq", "-cq", str(qv)]
+        if rc_mode == "preset" and real_preset:
             cmd+= ["-preset", real_preset]
         cmd+= p_extra
-        if bitrate_mbps:
-            br = f"{bitrate_mbps}M"
-            cmd += ["-b:v", br, "-maxrate", br, "-bufsize", f"{bitrate_mbps * 2}M"]
-        print(f"[DEBUG] GPU => vbr_hq + -cq={qv}")
+        print(f"[DEBUG] GPU rate-control => mode={rc_mode}, bitrate_mode={bitrate_mode}")
         
 
     if fps:
@@ -643,6 +668,8 @@ def encode_closedgop(
     if filter_str:
         cmd+= ["-vf", filter_str]
 
+    # map video and optional audio; copy audio stream where present
+    cmd += ["-map", "0:v:0", "-map", "0:a?", "-c:a", "copy"]
     cmd+= [outname]
     print("ENCODE_CLOSEDGOP:", " ".join(cmd))
     #subprocess.run(cmd, check=True)
@@ -729,8 +756,8 @@ def copy_cut(src,start,end,outfile):
         "-ss",f"{start:.3f}",
         "-i",src,
         "-t",f"{dur:.3f}",
-        "-map","0:v:0",
-        "-c","copy",
+        "-map","0:v:0", "-map", "0:a?",
+        "-c:v","copy","-c:a","copy",
         outfile
     ]
     print("COPY_CUT:", " ".join(cmd))
@@ -744,8 +771,15 @@ def crossfade_2(
     crf=23,
     fps=None,width=None,preset=None,
     overlap=2,
-    bitrate_mbps=None
+    bitrate_mbps=None,
+    rc_mode="crf",
+    bitrate_mode="vbr"
 ):
+    if bitrate_mbps is None:
+        bitrate_mbps = 20
+    rc_mode = (rc_mode or "crf").lower()
+    bitrate_mode = (bitrate_mode or "vbr").lower()
+
     enc_name, mode= determine_encoder(encoder,hw_encode)
     real_preset= preset
     if mode=="gpu":
@@ -761,41 +795,76 @@ def crossfade_2(
     filter_complex.append(f"[v0][v1]xfade=transition=fade:duration={overlap}:offset=0[vout]")
     flt=";".join(filter_complex)
 
-    cmd=[
-        "ffmpeg","-hide_banner","-y",
-        "-i",inA,
-        "-i",inB,
-        "-filter_complex",flt,
-        "-map","[vout]"
-    ]
+    # detect whether inputs contain audio streams
+    def _has_audio(path):
+        try:
+            p = subprocess.run([
+                "ffprobe","-v","error","-select_streams","a","-show_entries","stream=index",
+                "-of","csv=p=0", path
+            ], capture_output=True, text=True)
+            return bool(p.stdout.strip())
+        except Exception:
+            return False
+
+    a_has = _has_audio(inA)
+    b_has = _has_audio(inB)
+
+    # if both have audio and overlap>0, create an audio acrossfade filter
+    audio_acrossfade = (a_has and b_has and overlap and overlap > 0)
+
+    if audio_acrossfade:
+        flt += ";" + f"[0:a][1:a]acrossfade=d={overlap}:c1=tri:c2=tri[aout]"
+
+    cmd=["ffmpeg","-hide_banner","-y","-i",inA,"-i",inB,"-filter_complex",flt]
+    # map video output
+    cmd += ["-map","[vout]"]
+    # map audio depending on availability
+    if audio_acrossfade:
+        cmd += ["-map","[aout]", "-c:a", "aac", "-b:a", "192k"]
+    else:
+        # preserve audio where present (prefer audio from first input if only one)
+        if a_has or b_has:
+            # map optional audio from first input if present, else from second
+            # use copy to avoid re-encoding
+            cmd += ["-map","0:a?","-map","1:a?","-c:a","copy"]
 
     if mode=="cpu":
-        # CPU => -crf
+        # CPU: apply exactly one selected control mode
         p_extra= get_cpu_closedgop_params(enc_name)
-        cmd+= ["-c:v", enc_name, "-crf", str(crf)]
-        if real_preset:
+        cmd+= ["-c:v", enc_name]
+        if rc_mode == "bitrate":
+            _apply_bitrate_flags(cmd, bitrate_mbps, bitrate_mode)
+        elif rc_mode == "preset":
+            pass
+        else:
+            cmd += ["-crf", str(crf)]
+        if rc_mode == "preset" and real_preset:
             cmd+= ["-preset", real_preset]
         cmd+= p_extra
-        if bitrate_mbps:
-            br = f"{bitrate_mbps}M"
-            cmd += ["-b:v", br, "-maxrate", br, "-bufsize", f"{bitrate_mbps * 2}M"]
-        print(f"[DEBUG] CROSSFADE => CPU => CRF={crf}")
+        print(f"[DEBUG] CROSSFADE CPU rate-control => mode={rc_mode}")
     else:
-        # GPU => pseudo CRF => vbr_hq -cq crf
-        qv= clamp_crf(crf)
+        # GPU: apply exactly one selected control mode
         p_extra= get_gpu_closedgop_params(hw_encode)
-        cmd+= ["-c:v", enc_name, "-rc","vbr_hq", "-cq", str(qv)]
-        if real_preset:
+        cmd+= ["-c:v", enc_name]
+        if rc_mode == "bitrate":
+            if bitrate_mode == "cbr":
+                cmd += ["-rc:v", "cbr"]
+            else:
+                cmd += ["-rc:v", "vbr_hq"]
+            _apply_bitrate_flags(cmd, bitrate_mbps, bitrate_mode)
+        elif rc_mode == "preset":
+            pass
+        else:
+            qv= clamp_crf(crf)
+            cmd += ["-rc:v", "vbr_hq", "-cq", str(qv)]
+        if rc_mode == "preset" and real_preset:
             cmd+= ["-preset", real_preset]
         cmd+= p_extra
-        if bitrate_mbps:
-            br = f"{bitrate_mbps}M"
-            cmd += ["-b:v", br, "-maxrate", br, "-bufsize", f"{bitrate_mbps * 2}M"]
-        print(f"[DEBUG] CROSSFADE => GPU => -cq={qv}")
+        print(f"[DEBUG] CROSSFADE GPU rate-control => mode={rc_mode}, bitrate_mode={bitrate_mode}")
 
     if fps:
         cmd+=["-r",str(fps)]
-    cmd+=["-pix_fmt","yuv420p","-an", outname]
+    cmd += ["-pix_fmt","yuv420p", outname]
     print("CROSSFADE_2:", " ".join(cmd))
     #subprocess.run(cmd,check=True)
     run_command_gui(cmd, log_func=print)
@@ -814,8 +883,7 @@ def final_concat_copy(parts,outfile):
         "ffmpeg","-hide_banner","-y",
         "-f","concat","-safe","0",
         "-i", tmp_list,
-        "-map","0:v:0",
-        "-c","copy",
+        "-map","0:v:0", "-map", "0:a?", "-c:v","copy","-c:a","copy",
         outfile
     ]
     print("FINAL CONCAT COPY:", " ".join(cmd))
@@ -843,8 +911,15 @@ def overlay_segment_encode(
     seg_duration=None,scale=1.0,x=0,y=0,
     encoder="libx265",hw_encode=None,crf=23,
     fps=None,preset=None,width=None,
-    bitrate_mbps=None
+    bitrate_mbps=None,
+    rc_mode="crf",
+    bitrate_mode="vbr"
 ):
+    if bitrate_mbps is None:
+        bitrate_mbps = 20
+    rc_mode = (rc_mode or "crf").lower()
+    bitrate_mode = (bitrate_mode or "vbr").lower()
+
     # => real alpha fade => RGBA => fade in/out => scale => overlay
     # => same idea as we had:
     #   fade_in => 0..fade_in => alpha=0..1
@@ -904,30 +979,41 @@ def overlay_segment_encode(
 
     if mode=="cpu":
         p_extra= get_cpu_closedgop_params(enc_name)
-        cmd+= ["-c:v", enc_name, "-crf", str(crf)]
-        if real_preset:
+        cmd+= ["-c:v", enc_name]
+        if rc_mode == "bitrate":
+            _apply_bitrate_flags(cmd, bitrate_mbps, bitrate_mode)
+        elif rc_mode == "preset":
+            pass
+        else:
+            cmd += ["-crf", str(crf)]
+        if rc_mode == "preset" and real_preset:
             cmd+= ["-preset", real_preset]
         cmd+= p_extra
-        if bitrate_mbps:
-            br = f"{bitrate_mbps}M"
-            cmd += ["-b:v", br, "-maxrate", br, "-bufsize", f"{bitrate_mbps * 2}M"]
-        print(f"[DEBUG] overlay => CPU => CRF={crf}")
+        print(f"[DEBUG] overlay CPU rate-control => mode={rc_mode}")
     else:
-        # GPU => pseudo CRF => vbr_hq -cq
-        qv= clamp_crf(crf)
+        # GPU: apply exactly one selected control mode
         p_extra= get_gpu_closedgop_params(hw_encode)
-        cmd+= ["-c:v", enc_name, "-rc","vbr_hq","-cq", str(qv)]
-        if real_preset:
+        cmd+= ["-c:v", enc_name]
+        if rc_mode == "bitrate":
+            if bitrate_mode == "cbr":
+                cmd += ["-rc:v", "cbr"]
+            else:
+                cmd += ["-rc:v", "vbr_hq"]
+            _apply_bitrate_flags(cmd, bitrate_mbps, bitrate_mode)
+        elif rc_mode == "preset":
+            pass
+        else:
+            qv= clamp_crf(crf)
+            cmd += ["-rc:v", "vbr_hq", "-cq", str(qv)]
+        if rc_mode == "preset" and real_preset:
             cmd+= ["-preset", real_preset]
         cmd+= p_extra
-        if bitrate_mbps:
-            br = f"{bitrate_mbps}M"
-            cmd += ["-b:v", br, "-maxrate", br, "-bufsize", f"{bitrate_mbps * 2}M"]
-        print(f"[DEBUG] overlay => GPU => -cq={qv}")
+        print(f"[DEBUG] overlay GPU rate-control => mode={rc_mode}, bitrate_mode={bitrate_mode}")
 
     if fps:
         cmd+=["-r",str(fps)]
-    cmd+=["-pix_fmt","yuv420p","-an", out_segment]
+    # preserve/copy audio from input 0 if present
+    cmd+=["-pix_fmt","yuv420p", "-map", "0:a?", "-c:a", "copy", out_segment]
 
     print("OVERLAY_SEGMENT_ENCODE:", " ".join(cmd))
     #subprocess.run(cmd,check=True)
@@ -940,7 +1026,7 @@ def build_segments_with_skip_and_overlay(
     merged_file, kf_list, total_duration,
     skip_instructions, overlay_instructions,
     encoder="libx265", hw_encode=None, crf=23, fps=None, width=None, preset=None,
-    temp_dir=None, bitrate_mbps=None
+    temp_dir=None, bitrate_mbps=None, rc_mode="crf", bitrate_mode="vbr"
 ):
     """
     Erzeugt Segmente (normal/skip/overlay) streng aufsteigend entlang der Timeline,
@@ -1056,7 +1142,9 @@ def build_segments_with_skip_and_overlay(
                 encoder=encoder, hw_encode=hw_encode, crf=crf,
                 fps=fps, width=width, preset=preset,
                 overlap=overlap,
-                bitrate_mbps=bitrate_mbps
+                bitrate_mbps=bitrate_mbps,
+                rc_mode=rc_mode,
+                bitrate_mode=bitrate_mode,
             )
             segments.append(xf_out)
 
@@ -1094,7 +1182,9 @@ def build_segments_with_skip_and_overlay(
                 seg_duration=seg_dur, scale=sc, x=xx, y=yy,
                 encoder=encoder, hw_encode=hw_encode, crf=crf,
                 fps=fps, preset=preset, width=None,
-                bitrate_mbps=bitrate_mbps
+                bitrate_mbps=bitrate_mbps,
+                rc_mode=rc_mode,
+                bitrate_mode=bitrate_mode,
             )
             segments.append(out_cut)
 
@@ -1155,8 +1245,10 @@ def xfade_main(cfg_path):
     hw_encode = cfg.get("hardware_encode", "none")
     encoder = cfg.get("encoder", "libx265")
     crf = cfg.get("crf", 23)
-    settings = QSettings("KVRouite", "KVRouite")
+    settings = QSettings("VGSync", "VGSync")
     bitrate_mbps = settings.value("encoder/bitrate_mbps", 20, type=int)
+    rc_mode = cfg.get("rate_control_mode", settings.value("encoder/rate_control_mode", "crf", type=str))
+    bitrate_mode = cfg.get("bitrate_mode", settings.value("encoder/bitrate_mode", "vbr", type=str))
     fps = cfg.get("fps", 30)
     width = cfg.get("width", None)
     preset = cfg.get("preset", None)
@@ -1197,7 +1289,9 @@ def xfade_main(cfg_path):
         crf=crf,
         width=width,
         preset=preset,
-        bitrate_mbps=bitrate_mbps
+        bitrate_mbps=bitrate_mbps,
+        rc_mode=rc_mode,
+        bitrate_mode=bitrate_mode,
     )
     print("[INFO] Cleaning up TRIM files to free space...")
     for path in trimmed_parts:
@@ -1229,7 +1323,9 @@ def xfade_main(cfg_path):
         width=width,
         preset=preset,
         temp_dir=temp_dir,
-        bitrate_mbps=bitrate_mbps     
+        bitrate_mbps=bitrate_mbps,
+        rc_mode=rc_mode,
+        bitrate_mode=bitrate_mode,
     )
 
     final_concat_copy(parts, final_out)

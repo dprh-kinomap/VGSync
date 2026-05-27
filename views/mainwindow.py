@@ -1,21 +1,21 @@
 # -*- coding: utf-8 -*-
 #
-# This file is part of KVRouite.
+# This file is part of VGSync.
 #
 # Copyright (C) 2025 by Bernd Eller
 #
-# KVRouite is free software: you can redistribute it and/or modify
+# VGSync is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
 # the Free Software Foundation, either version 3 of the License, or
 # (at your option) any later version.
 #
-# KVRouite is distributed in the hope that it will be useful,
+# VGSync is distributed in the hope that it will be useful,
 # but WITHOUT ANY WARRANTY; without even the implied warranty of
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
 # See the GNU General Public License for more details.
 #
 # You should have received a copy of the GNU General Public License
-# along with KVRouite. If not, see <https://www.gnu.org/licenses/>.
+# along with VGSync. If not, see <https://www.gnu.org/licenses/>.
 #
 
 # views/mainwindow.py
@@ -521,7 +521,7 @@ class MainWindow(QMainWindow):
         
         
         
-        self.setWindowTitle(f"KVRouite v{APP_VERSION} - the Easy Video and GPX-Sync Tool")
+        self.setWindowTitle(f"VGSync v{APP_VERSION} - the Easy Video and GPX-Sync Tool")
             
         
         self._sync_prompt_answer = None   # None = unknown / not asked yet, True/False = user's first answer
@@ -846,7 +846,7 @@ class MainWindow(QMainWindow):
         temp_dir_menu.addAction(action_set_temp_dir)
 
         action_clear_temp_dir = QAction("Reset Temp Dir", self)
-        action_clear_temp_dir.setStatusTip("reset the temp-direrctory to KVRouite-standard")
+        action_clear_temp_dir.setStatusTip("reset the temp-direrctory to VGSync-standard")
         action_clear_temp_dir.triggered.connect(self._on_clear_temp_dir)
         temp_dir_menu.addAction(action_clear_temp_dir)
 
@@ -967,7 +967,7 @@ class MainWindow(QMainWindow):
         help_menu.addAction(docs_action)
         
         tutorials_action = QAction("Youtube-Tutorials", self)
-        tutorials_action.setStatusTip("Open KVRouite YouTube channel with tutorials")
+        tutorials_action.setStatusTip("Open VGSync YouTube channel with tutorials")
         tutorials_action.triggered.connect(self._on_open_tutorials)
         help_menu.addAction(tutorials_action)
         
@@ -982,17 +982,17 @@ class MainWindow(QMainWindow):
 
         self.action_auto_update_check = QAction("Auto Check for Updates", self, checkable=True)
         self.action_auto_update_check.setStatusTip("Check for updates on startup")
-        s = QSettings("KVRouite","KVRouite")
+        s = QSettings("VGSync","VGSync")
         auto_on = s.value("updates/auto_check", True, type=bool)
         self.action_auto_update_check.setChecked(bool(auto_on))
         self.action_auto_update_check.toggled.connect(
-            lambda on: QSettings("KVRouite","KVRouite").setValue("updates/auto_check", bool(on))
+            lambda on: QSettings("VGSync","VGSync").setValue("updates/auto_check", bool(on))
         )
         help_menu.addAction(self.action_auto_update_check)
 
         # Default-Repo fest verdrahten (einmalig setzen, wenn leer)
         if not s.value("updates/repo", None, type=str):
-            s.setValue("updates/repo", "ridewithoutstomach/KVRouite")
+            s.setValue("updates/repo", "ridewithoutstomach/VGSync")
 
         # Auto-Check einige Sekunden nach Start
         if self.action_auto_update_check.isChecked():
@@ -1254,7 +1254,7 @@ class MainWindow(QMainWindow):
         #
         self.chart.markerClicked.connect(self._on_chart_marker_clicked)
         self.chart.set_gpx_data([])
-        s = QSettings("KVRouite", "KVRouite")
+        s = QSettings("VGSync", "VGSync")
         speed_cap = s.value("chart/speedCap", 70.0, type=float)
         self.chart.set_speed_cap(speed_cap)
         # Elevation edit on chart
@@ -1435,7 +1435,7 @@ class MainWindow(QMainWindow):
         marker_s = self.timeline.marker_position()
 
         # 1) Xfade-Länge aus Encoder-Settings
-        s = QSettings("KVRouite", "KVRouite")
+        s = QSettings("VGSync", "VGSync")
         try:
             xfade_sec = s.value("encoder/xfade", 2, type=int)
         except Exception:
@@ -1547,7 +1547,7 @@ class MainWindow(QMainWindow):
         request = urllib.request.Request(
             url,
             headers={
-                "User-Agent": "KVRouite/1.0 (location search via OSM Nominatim)"
+                "User-Agent": "VGSync/1.0 (location search via OSM Nominatim)"
             }
         )
         with urllib.request.urlopen(request, timeout=15) as resp:
@@ -1818,7 +1818,7 @@ class MainWindow(QMainWindow):
         self.street_view_view.page().runJavaScript(js_get_coords, 0, _on_coords)
         
     def _on_show_mpv_path(self):
-        s = QSettings("KVRouite", "KVRouite")
+        s = QSettings("VGSync", "VGSync")
         path_stored = s.value("paths/mpv", "", type=str)
         if path_stored and os.path.isfile(os.path.join(path_stored, "libmpv-2.dll")):
             msg = f"Currently stored libmpv path:\n{path_stored}"
@@ -1846,7 +1846,7 @@ class MainWindow(QMainWindow):
             return
     
         # -> Okay, wir speichern es
-        s = QSettings("KVRouite", "KVRouite")
+        s = QSettings("VGSync", "VGSync")
         s.setValue("paths/mpv", folder)
         QMessageBox.information(self, "libmpv Path set",
             f"libmpv-2.dll path set to:\n{folder}\n\n"
@@ -1854,7 +1854,7 @@ class MainWindow(QMainWindow):
 
 
     def _on_clear_mpv_path(self):
-        s = QSettings("KVRouite", "KVRouite")
+        s = QSettings("VGSync", "VGSync")
         s.remove("paths/mpv")
         QMessageBox.information(self, "libmpv Path cleared",
             "The libmpv path has been removed from QSettings.\n"
@@ -1922,7 +1922,7 @@ class MainWindow(QMainWindow):
          - mapbox/key
         (jeweils Base64-kodiert) und schreibt sie in self._maptiler_key etc.
         """
-        s = QSettings("KVRouite", "KVRouite")
+        s = QSettings("VGSync", "VGSync")
 
         def decode(b64text):
             if not b64text:
@@ -1955,7 +1955,7 @@ class MainWindow(QMainWindow):
         """
         Speichert den Key in Base64, z. B. provider='mapTiler'|'bing'|'mapbox'.
         """
-        s = QSettings("KVRouite", "KVRouite")
+        s = QSettings("VGSync", "VGSync")
         enc = base64.b64encode(plain_key.encode("utf-8")).decode("utf-8")
 
         if provider == "mapTiler":
@@ -2123,7 +2123,7 @@ class MainWindow(QMainWindow):
         und setzt fallback=4 für black/red/blue, fallback=6 für yellow.
         Anschließend wird colorSizeMap[...] in JavaScript aktualisiert.
         """
-        s = QSettings("KVRouite", "KVRouite")
+        s = QSettings("VGSync", "VGSync")
 
         defaults = {
             "black": 4,
@@ -2147,7 +2147,7 @@ class MainWindow(QMainWindow):
         Fragt neuen Wert ab und speichert in QSettings => "mapSize/black" etc.
         Übergibt dann an JS => updateAllPointsByColor('black', new_val).
         """
-        s = QSettings("KVRouite", "KVRouite")
+        s = QSettings("VGSync", "VGSync")
 
         default_size = 6 if color_str == "yellow" else 4
         current_val = s.value(f"mapSize/{color_str}", default_size, type=int)
@@ -2237,7 +2237,7 @@ class MainWindow(QMainWindow):
 
         # 4) Optional: in QSettings speichern
        
-        s = QSettings("KVRouite", "KVRouite")
+        s = QSettings("VGSync", "VGSync")
         s.setValue("chart/speedCap", new_val)
     
         
@@ -2245,7 +2245,7 @@ class MainWindow(QMainWindow):
         
         
 
-        s = QSettings("KVRouite", "KVRouite")
+        s = QSettings("VGSync", "VGSync")
         path_stored = s.value("paths/ffmpeg", "", type=str)
         if path_stored and os.path.isdir(path_stored):
             msg = f"Currently stored FFmpeg path:\n{path_stored}"
@@ -2278,7 +2278,7 @@ class MainWindow(QMainWindow):
             return
     
         # store in QSettings
-        s = QSettings("KVRouite", "KVRouite")
+        s = QSettings("VGSync", "VGSync")
         s.setValue("paths/ffmpeg", folder)
     
         # optionally add to PATH
@@ -2376,7 +2376,7 @@ class MainWindow(QMainWindow):
 
     def _on_encoder_setup_clicked(self):
         # xfade vor dem Öffnen merken
-        s = QSettings("KVRouite", "KVRouite")
+        s = QSettings("VGSync", "VGSync")
         old_xfade = s.value("encoder/xfade", 2, type=int)
 
         dlg = EncoderSetupDialog(self)
@@ -2418,7 +2418,7 @@ class MainWindow(QMainWindow):
         so that next time it might auto-detect or prompt again.
         """
        
-        s = QSettings("KVRouite", "KVRouite")
+        s = QSettings("VGSync", "VGSync")
         s.remove("paths/ffmpeg")
     
         QMessageBox.information(self, "FFmpeg Path cleared",
@@ -3533,10 +3533,19 @@ class MainWindow(QMainWindow):
         if self.video_editor.is_playing and is_gpx_video_shift_set():
             self.map_widget.show_yellow(new_index,True)
         else:
+            # When the user selects a point in the list (pause mode), always
+            # center the map on it so the selection is obvious — independent
+            # of whether GPX<->video auto-sync is active.
             self.map_widget.show_blue(
                 new_index,
-                do_center=bool(self._autoSyncNewPointsWithVideoTime)
+                do_center=True
             )
+            # Ensure centering happens even when the JS feature list isn't ready
+            # (fallback: center using Python-side GPX coordinates).
+            try:
+                self.map_widget.center_on_index(new_index)
+            except Exception:
+                pass
         
 
         # 3) Liste: dieselbe Zeile gelb machen
@@ -3870,10 +3879,11 @@ class MainWindow(QMainWindow):
         # Text mit Logo am Ende
         message_text = f"""
         <div>
-            <h3>KVRouite - Video and GPX Sync Tool</h3>
+            <h3>VGSync - Video and GPX Sync Tool</h3>
             Version: {APP_VERSION}<br><br>
             
             Copyright (C) 2025 Bernd Eller<br>
+            Copyright (C) 2026 Kinomap<br>
             This program is free software: you can redistribute it and/or modify 
             it under the terms of the GNU General Public License as published by 
             the Free Software Foundation, either version 3 of the License, or 
@@ -4850,15 +4860,6 @@ class MainWindow(QMainWindow):
         
     ## on_safe_click
     def on_render_clicked(self):
-        # 1) Sicherheitsabfrage
-        msg = QMessageBox(self)
-        msg.setWindowTitle("Are you sure?")
-        msg.setText("We are now creating the final video, changes are no longer possible! Sure?")
-        msg.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
-        r = msg.exec()
-        if r == QMessageBox.No:
-            return
-
         if not self.playlist:
             QMessageBox.warning(self, "Error", "No videos in playlist!")
             return
@@ -4866,15 +4867,22 @@ class MainWindow(QMainWindow):
         # -------------------------------------------------
         # NEUE LOGIK: Wenn Edit-Mode == "encode" => JSON schreiben
         if self._edit_mode == "encode":
+            # Only in encode mode do we need/show Encoder Setup.
+            enc_dlg = EncoderSetupDialog(self)
+            res = enc_dlg.exec()
+            if res != QDialog.Accepted:
+                return
             
             # 1) Daten aus QSettings lesen (Encoder Setup)
-            s = QSettings("KVRouite","KVRouite")
+            s = QSettings("VGSync","VGSync")
             xfade_val   = s.value("encoder/xfade", 2, type=int)
             hw_encode   = s.value("encoder/hw", "none", type=str)
             container   = s.value("encoder/container", "x265", type=str)
             crf_val     = s.value("encoder/crf", 25, type=int)
-            fps_val     = s.value("encoder/fps", 30, type=int)
+            fps_val     = s.value("encoder/fps", 30.0, type=float)
             preset_val  = s.value("encoder/preset", "fast", type=str)
+            rc_mode_val = s.value("encoder/rate_control_mode", "crf", type=str)
+            br_mode_val = s.value("encoder/bitrate_mode", "vbr", type=str)
             width_val   = s.value("encoder/res_w", 1280, type=int)
 
             # 2) Cuts => skip_instructions
@@ -4932,12 +4940,14 @@ class MainWindow(QMainWindow):
                 "crf": crf_val,
                 "fps": fps_val,
                 "width": width_val,
-                "preset": preset_val
+                "preset": preset_val,
+                "rate_control_mode": rc_mode_val,
+                "bitrate_mode": br_mode_val
             }
 
             
             #temp_dir = tempfile.gettempdir()
-            # 6) In unser KVRouite-Temp speichern
+            # 6) In unser VGSync-Temp speichern
             
             temp_dir = MY_GLOBAL_TMP_DIR
             json_path = os.path.join(temp_dir, "vg_encoder_job.json")
@@ -6596,14 +6606,14 @@ class MainWindow(QMainWindow):
             self,
             "Save Project As",
             "",
-            "KVRouite Project (*.KVRouiteproj);;VGSync Project (*.vgsyncproj)"
+            "VGSync Project (*.vgsyncproj)"
         )
         if not filename:
             return
         # Standard-Endung setzen, falls keine vorhanden ist
         lower = filename.lower()
-        if not (lower.endswith(".kvrouiteproj") or lower.endswith(".vgsyncproj")):
-            filename += ".KVRouiteproj"
+        if not lower.endswith(".vgsyncproj"):
+            filename += ".vgsyncproj"
 
         if self._write_project_to_path(filename, show_message=True):
             # Bei Erfolg: aktuellen Projektpfad setzen, Dirty-Flag zurücksetzen
@@ -6682,7 +6692,7 @@ class MainWindow(QMainWindow):
             self,
             "Load Project File",
             "",
-            "Project Files (*.kvrouiteproj *.vgsyncproj);;KVRouite Project (*.kvrouiteproj);;VGSync Project (*.vgsyncproj);;All Files (*.*)"
+            "Project Files (*.vgsyncproj *.kvrouiteproj);;VGSync Project (*.vgsyncproj);;Legacy KVRouite Project (*.kvrouiteproj);;All Files (*.*)"
         )
     
         if not file_path:
@@ -6692,7 +6702,7 @@ class MainWindow(QMainWindow):
         file_ext = file_path.lower()
     
         try:
-            if file_ext.endswith('.kvrouiteproj') or file_ext.endswith('.vgsyncproj'):
+            if file_ext.endswith('.vgsyncproj') or file_ext.endswith('.kvrouiteproj'):
                 # Deine existierende Projekt-Lade-Logik hier aufrufen
                 # (die Logik, die du bereits in load_project hattest)
                 self.process_open_project(file_path)
@@ -6702,7 +6712,7 @@ class MainWindow(QMainWindow):
                     self, 
                     "Unsupported Format", 
                     f"File format not supported: {file_path}\n"
-                    "Please select a .kvrouiteproj or .vgsyncproj file."
+                    "Please select a .vgsyncproj or .kvrouiteproj file."
                 )
                 return
                 
@@ -6934,7 +6944,7 @@ class MainWindow(QMainWindow):
         if path.lower().endswith(".autosave"):
             return
 
-        s = QSettings("KVRouite", "KVRouite")
+        s = QSettings("VGSync", "VGSync")
         file_history = s.value("file_history", [], type=list)
 
         if path in file_history:
@@ -6946,7 +6956,7 @@ class MainWindow(QMainWindow):
         s.setValue("file_history", file_history)
 
     def load_last_gpx_paths(self) -> list[str]:
-        s = QSettings("KVRouite", "KVRouite")
+        s = QSettings("VGSync", "VGSync")
         return s.value("file_history", [], type=list)
 
     def update_recent_files_menu(self):
@@ -6974,7 +6984,7 @@ class MainWindow(QMainWindow):
             self.process_open_fit(path)  # default mode="new" passt hier
         elif(path.endswith(".mp4") or path.endswith(".MP4")):
             self.process_open_mp4([path])
-        elif(path.lower().endswith(".kvrouiteproj") or path.lower().endswith(".vgsyncproj")):
+        elif path.lower().endswith((".vgsyncproj", ".kvrouiteproj")):
             self.process_open_project(path)
         elif(path.lower().endswith(".json")):
             # Geoinfer / proposals JSON erneut importieren
@@ -7171,7 +7181,7 @@ class MainWindow(QMainWindow):
         from PySide6.QtCore import QSettings
         import config
 
-        s = QSettings("KVRouite", "KVRouite")
+        s = QSettings("VGSync", "VGSync")
         path_stored = s.value("tempSegmentsDir", "", str)
         if path_stored and os.path.isdir(path_stored):
             msg = f"Currently stored Temp Directory:\n{path_stored}"
@@ -7190,7 +7200,7 @@ class MainWindow(QMainWindow):
         if not folder:
             return
     
-        s = QSettings("KVRouite", "KVRouite")
+        s = QSettings("VGSync", "VGSync")
         s.setValue("tempSegmentsDir", folder)
         s.sync()
     
@@ -7208,7 +7218,7 @@ class MainWindow(QMainWindow):
         """
         from PySide6.QtCore import QSettings
     
-        s = QSettings("KVRouite", "KVRouite")
+        s = QSettings("VGSync", "VGSync")
         s.remove("tempSegmentsDir")
         s.sync()
 
@@ -8379,7 +8389,7 @@ class MainWindow(QMainWindow):
         """
         Lädt die Player-Einstellungen aus QSettings.
         """
-        s = QSettings("KVRouite", "KVRouite")
+        s = QSettings("VGSync", "VGSync")
         
         # Standardwerte: True (beide Optionen aktiv)
         #show_endcut = s.value("player/show_endcut", True, type=bool)
@@ -8395,7 +8405,7 @@ class MainWindow(QMainWindow):
         """
         Speichert die Player-Einstellungen in QSettings.
         """
-        s = QSettings("KVRouite", "KVRouite")
+        s = QSettings("VGSync", "VGSync")
         
         
         s.setValue("player/show_endcut_warning", self.action_show_endcut_warning.isChecked())
@@ -8415,9 +8425,9 @@ class MainWindow(QMainWindow):
 
     def _on_open_tutorials(self):
         """
-        Öffnet den KVRouite YouTube-Kanal im Standard-Browser nach Bestätigung durch den Benutzer.
+        Öffnet den VGSync YouTube-Kanal im Standard-Browser nach Bestätigung durch den Benutzer.
         """
-        youtube_url = "https://www.youtube.com/@KVRouite"
+        youtube_url = "https://www.youtube.com/@VGSync"
         
         # Überprüfe, ob die URL gültig ist
         url = QUrl(youtube_url)
@@ -8433,7 +8443,7 @@ class MainWindow(QMainWindow):
         reply = QMessageBox.question(
             self,
             "Open YouTube Tutorials",
-            "Do you want to open the KVRouite YouTube channel ?\n\n"
+            "Do you want to open the VGSync YouTube channel ?\n\n"
             "This will open in your default web browser.",
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.No  # Standard-Button: No
@@ -8787,7 +8797,7 @@ class MainWindow(QMainWindow):
         
 
         # 1) Aktuelles xfade aus dem Setup
-        s = QSettings("KVRouite", "KVRouite")
+        s = QSettings("VGSync", "VGSync")
         try:
             xfade = float(s.value("encoder/xfade", 2, type=int))
         except Exception:
@@ -8856,8 +8866,8 @@ class MainWindow(QMainWindow):
 
     def _kickoff_update_check(self):
         # Repo aus Settings (Default wurde im __init__ gesetzt)
-        s = QSettings("KVRouite","KVRouite")
-        repo = s.value("updates/repo", "ridewithoutstomach/KVRouite", type=str)
+        s = QSettings("VGSync","VGSync")
+        repo = s.value("updates/repo", "ridewithoutstomach/VGSync", type=str)
 
         url = f"https://api.github.com/repos/{repo}/releases?per_page=10"
         req = QNetworkRequest(QUrl(url))
@@ -8865,9 +8875,9 @@ class MainWindow(QMainWindow):
         # GitHub erwartet einen User-Agent
         try:
             from config import APP_VERSION
-            ua = f"KVRouite/{APP_VERSION}"
+            ua = f"VGSync/{APP_VERSION}"
         except Exception:
-            ua = "KVRouite"
+            ua = "VGSync"
         req.setRawHeader(b"User-Agent", ua.encode("utf-8"))
         req.setRawHeader(b"Accept", b"application/vnd.github+json")
 
@@ -8916,7 +8926,7 @@ class MainWindow(QMainWindow):
             # Fallback: /tags
             url = f"https://api.github.com/repos/{repo}/tags?per_page=10"
             req = QNetworkRequest(QUrl(url))
-            req.setRawHeader(b"User-Agent", b"KVRouite")
+            req.setRawHeader(b"User-Agent", b"VGSync")
             r2 = self._update_nam.get(req)
             r2.finished.connect(lambda r=r2, reponame=repo: self._on_tags_reply(r, reponame))
             return
