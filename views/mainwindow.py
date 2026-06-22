@@ -7074,62 +7074,69 @@ class MainWindow(QMainWindow):
 
         # --- 6) finale Videolänge (Exportlänge) holen ---
         # Bevorzugt deine interne Berechnung (wie in der Infozeile). Fallback: Summe video_durations - Cuts.
-        try:
-            final_duration_s = float(self._calculate_cut_total_duration())
-        except Exception:
-            # Fallback robust
-            vd = getattr(self, "video_durations", None)
-            if isinstance(vd, (list, tuple)):
-                total_len = float(sum(vd))
-            elif isinstance(vd, dict):
-                total_len = float(sum(vd.values()))
-            elif vd is not None:
-                total_len = float(vd)
-            else:
-                total_len = float(getattr(self, "real_total_duration", 0.0))
+        has_video_duration = bool(getattr(self, "video_durations", None))
+        final_duration_s = None
 
-            cm = getattr(self, "cut_manager", None)
+        if has_video_duration:
             try:
-                cuts = float(cm.get_total_cuts()) if cm else 0.0
+                final_duration_s = float(self._calculate_cut_total_duration())
             except Exception:
-                cuts = 0.0
+                # Fallback robust
+                vd = getattr(self, "video_durations", None)
+                if isinstance(vd, (list, tuple)):
+                    total_len = float(sum(vd))
+                elif isinstance(vd, dict):
+                    total_len = float(sum(vd.values()))
+                elif vd is not None:
+                    total_len = float(vd)
+                else:
+                    total_len = float(getattr(self, "real_total_duration", 0.0))
 
-            final_duration_s = max(0.0, total_len - cuts)
+                cm = getattr(self, "cut_manager", None)
+                try:
+                    cuts = float(cm.get_total_cuts()) if cm else 0.0
+                except Exception:
+                    cuts = 0.0
+
+                final_duration_s = max(0.0, total_len - cuts)
 
         # --- 7) ENDE millisekundengenau auf final_duration_s klemmen ---
-        last_valid_index = -1
-        for i, pt in enumerate(truncated):
-            rel_s = (pt["time"] - first_gpx_video_time).total_seconds()
-            if rel_s <= final_duration_s:
-                last_valid_index = i
-            else:
-                break
+        if final_duration_s is None:
+            final_truncated = truncated
+        else:
+            last_valid_index = -1
+            for i, pt in enumerate(truncated):
+                rel_s = (pt["time"] - first_gpx_video_time).total_seconds()
+                if rel_s <= final_duration_s:
+                    last_valid_index = i
+                else:
+                    break
 
-        if last_valid_index < 0:
-            QMessageBox.warning(self, "Truncation", "After shortening to the video length, no meaningful GPX remains!")
-            return
+            if last_valid_index < 0:
+                QMessageBox.warning(self, "Truncation", "After shortening to the video length, no meaningful GPX remains!")
+                return
 
-        final_truncated = truncated[:last_valid_index + 1]
+            final_truncated = truncated[:last_valid_index + 1]
 
-        # Interpolation des letzten Punkts, wenn Exportende zwischen zwei Punkten liegt
-        if last_valid_index < len(truncated) - 1:
-            A = final_truncated[-1]
-            B = truncated[last_valid_index + 1]
-            tA = (A["time"] - first_gpx_video_time).total_seconds()
-            tB = (B["time"] - first_gpx_video_time).total_seconds()
+            # Interpolation des letzten Punkts, wenn Exportende zwischen zwei Punkten liegt
+            if last_valid_index < len(truncated) - 1:
+                A = final_truncated[-1]
+                B = truncated[last_valid_index + 1]
+                tA = (A["time"] - first_gpx_video_time).total_seconds()
+                tB = (B["time"] - first_gpx_video_time).total_seconds()
 
-            if tB > final_duration_s and (tB - tA) > 0.0:
-                f = (final_duration_s - tA) / (tB - tA)
-                adjusted_pt = {
-                    "lat": A["lat"] + f * (B["lat"] - A["lat"]),
-                    "lon": A["lon"] + f * (B["lon"] - A["lon"]),
-                    "ele": A.get("ele", 0.0) + f * (B.get("ele", 0.0) - A.get("ele", 0.0)),
-                    "time": first_gpx_video_time + timedelta(seconds=final_duration_s),
-                    "delta_m": 0.0,
-                    "speed_kmh": 0.0,
-                    "gradient": 0.0,
-                }
-                final_truncated[-1] = adjusted_pt
+                if tB > final_duration_s and (tB - tA) > 0.0:
+                    f = (final_duration_s - tA) / (tB - tA)
+                    adjusted_pt = {
+                        "lat": A["lat"] + f * (B["lat"] - A["lat"]),
+                        "lon": A["lon"] + f * (B["lon"] - A["lon"]),
+                        "ele": A.get("ele", 0.0) + f * (B.get("ele", 0.0) - A.get("ele", 0.0)),
+                        "time": first_gpx_video_time + timedelta(seconds=final_duration_s),
+                        "delta_m": 0.0,
+                        "speed_kmh": 0.0,
+                        "gradient": 0.0,
+                    }
+                    final_truncated[-1] = adjusted_pt
 
         if len(final_truncated) < 2:
             QMessageBox.warning(self, "Truncation", "After shortening to the video length, no meaningful GPX remains!")
