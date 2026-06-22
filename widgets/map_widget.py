@@ -317,7 +317,9 @@ class MapWidget(QWidget):
         self.show_blue(index_clicked)
 
         if self._mainwindow and hasattr(self._mainwindow, "on_user_selected_index"):
-            self._mainwindow.on_user_selected_index(index_clicked)
+            # The point is already under the cursor. Preserve the map viewport;
+            # the shared handler recenters only for selections made elsewhere.
+            self._mainwindow.on_user_selected_index(index_clicked, center_map=False)
 
     @Slot(int, bool)
     def onMapPointDelete(self, index_clicked: int, shift_next: bool):

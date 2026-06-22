@@ -3517,7 +3517,7 @@ class MainWindow(QMainWindow):
 
         
         
-    def on_user_selected_index(self, new_index: int):
+    def on_user_selected_index(self, new_index: int, center_map: bool = True):
         """
         Zentrale Methode für Klicks in Map oder GPX-Liste (im Pause-Modus).
         Wir entfernen die 'Loch'-Logik, sodass ein roter Punkt beim Anklicken
@@ -3533,19 +3533,19 @@ class MainWindow(QMainWindow):
         if self.video_editor.is_playing and is_gpx_video_shift_set():
             self.map_widget.show_yellow(new_index,True)
         else:
-            # When the user selects a point in the list (pause mode), always
-            # center the map on it so the selection is obvious — independent
-            # of whether GPX<->video auto-sync is active.
+            # List selections navigate to the point. Map selections are already
+            # visible and must keep the user's current center and zoom level.
             self.map_widget.show_blue(
                 new_index,
-                do_center=True
+                do_center=center_map
             )
-            # Ensure centering happens even when the JS feature list isn't ready
-            # (fallback: center using Python-side GPX coordinates).
-            try:
-                self.map_widget.center_on_index(new_index)
-            except Exception:
-                pass
+            if center_map:
+                # Ensure centering happens even when the JS feature list isn't
+                # ready (fallback: use Python-side GPX coordinates).
+                try:
+                    self.map_widget.center_on_index(new_index)
+                except Exception:
+                    pass
         
 
         # 3) Liste: dieselbe Zeile gelb machen
