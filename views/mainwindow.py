@@ -7074,7 +7074,7 @@ class MainWindow(QMainWindow):
 
         # --- 6) finale Videolänge (Exportlänge) holen ---
         # Bevorzugt deine interne Berechnung (wie in der Infozeile). Fallback: Summe video_durations - Cuts.
-        has_video_duration = bool(getattr(self, "video_durations", None))
+        has_video_duration = is_gpx_video_shift_set() and bool(getattr(self, "video_durations", None))
         final_duration_s = None
 
         if has_video_duration:
