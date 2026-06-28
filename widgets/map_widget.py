@@ -421,8 +421,9 @@ class MapWidget(QWidget):
         self._yellow_idx = index
         self._color_point(index, "yellow", None, do_center)
 
-    def center_on_index(self, index: int, zoom: int = 15) -> bool:
+    def center_on_index(self, index: int, zoom=15) -> bool:
         """Center the map on the GPX point at `index` using stored GPX coords.
+        If `zoom` is None, keep the current map zoom.
         Returns True if centering JS was requested, False otherwise.
         """
         try:
@@ -434,8 +435,17 @@ class MapWidget(QWidget):
             lon = pt.get("lon")
             if lat is None or lon is None:
                 return False
-            # Use the JS helper centerMap(lat, lon, zoomLevel)
-            js = f"centerMap({lat}, {lon}, {zoom});"
+            if zoom is None:
+                js = (
+                    f"(function(){{\n"
+                    f"  if (!map || typeof ol === 'undefined') return;\n"
+                    f"  var coord = ol.proj.fromLonLat([{lon}, {lat}]);\n"
+                    f"  map.getView().animate({{center: coord, duration: 600}});\n"
+                    f"}})();"
+                )
+            else:
+                # Use the JS helper centerMap(lat, lon, zoomLevel)
+                js = f"centerMap({lat}, {lon}, {zoom});"
             self.view.page().runJavaScript(js)
             return True
         except Exception as e:

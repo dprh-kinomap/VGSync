@@ -1343,6 +1343,7 @@ class MainWindow(QMainWindow):
         self.video_control.goto_video_end_clicked.connect(self.on_goto_video_end_clicked)
         self.video_control.step_value_changed.connect(self.on_step_mode_changed)
         self.video_control.multiplier_value_changed.connect(self.on_multiplier_changed)
+        self.video_control.playback_rate_changed.connect(self.on_playback_rate_changed)
         self.video_control.backward_clicked.connect(self.step_manager.step_backward)
         self.video_control.forward_clicked.connect(self.step_manager.step_forward)
         
@@ -1384,6 +1385,7 @@ class MainWindow(QMainWindow):
         self.vlc_speeds = [0.5, 0.67, 1.0, 1.5, 2.0, 4.0, 8.0, 16.0, 32.0]
         self.speed_index = 2
         self.current_rate = self.vlc_speeds[self.speed_index]
+        self.video_control.set_playback_rate(self.current_rate)
 
         # Video-Abspiel-Ende
         self.video_editor.play_ended.connect(self.on_play_ended)
@@ -3543,7 +3545,7 @@ class MainWindow(QMainWindow):
                 # Ensure centering happens even when the JS feature list isn't
                 # ready (fallback: use Python-side GPX coordinates).
                 try:
-                    self.map_widget.center_on_index(new_index)
+                    self.map_widget.center_on_index(new_index, zoom=None)
                 except Exception:
                     pass
         
@@ -4098,14 +4100,12 @@ class MainWindow(QMainWindow):
     def _on_detached_plus(self):
         if self.speed_index < len(self.vlc_speeds) - 1:
             self.speed_index += 1
-        self.current_rate = self.vlc_speeds[self.speed_index]
-        self.video_editor.set_playback_rate(self.current_rate)
+        self._set_current_playback_rate(self.vlc_speeds[self.speed_index])
 
     def _on_detached_minus(self):
         if self.speed_index > 0:
             self.speed_index -= 1
-        self.current_rate = self.vlc_speeds[self.speed_index]
-        self.video_editor.set_playback_rate(self.current_rate)    
+        self._set_current_playback_rate(self.vlc_speeds[self.speed_index])    
 
     
    
@@ -4809,6 +4809,21 @@ class MainWindow(QMainWindow):
             val = 1.0
         self.step_manager.set_step_multiplier(val)
 
+    def on_playback_rate_changed(self, rate: float):
+        self._set_current_playback_rate(rate)
+
+    def _set_current_playback_rate(self, rate: float):
+        try:
+            rate = float(rate)
+        except (TypeError, ValueError):
+            rate = 1.0
+
+        self.current_rate = rate
+        if rate in self.vlc_speeds:
+            self.speed_index = self.vlc_speeds.index(rate)
+        self.video_editor.set_playback_rate(self.current_rate)
+        self.video_control.set_playback_rate(self.current_rate)
+
     def _on_timeline_marker_moved(self, new_time_s: float):
         self.video_editor._jump_to_global_time(new_time_s)
         
@@ -5140,13 +5155,11 @@ class MainWindow(QMainWindow):
         if event.key() == Qt.Key_Plus or event.text() == '+':
             if self.speed_index < len(self.vlc_speeds) - 1:
                 self.speed_index += 1
-                self.current_rate = self.vlc_speeds[self.speed_index]
-                self.video_editor.set_playback_rate(self.current_rate)
+                self._set_current_playback_rate(self.vlc_speeds[self.speed_index])
         elif event.key() == Qt.Key_Minus or event.text() == '-':
             if self.speed_index > 0:
                 self.speed_index -= 1
-                self.current_rate = self.vlc_speeds[self.speed_index]
-                self.video_editor.set_playback_rate(self.current_rate)
+                self._set_current_playback_rate(self.vlc_speeds[self.speed_index])
                 
         elif event.key() == Qt.Key_V:
             self.action_toggle_360.trigger()  # löst deinen Menü-Flow aus und hält den Haken in sync
