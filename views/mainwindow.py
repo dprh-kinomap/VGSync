@@ -97,6 +97,7 @@ from managers.step_manager import StepManager
 from managers.end_manager import EndManager
 from managers.cut_manager import VideoCutManager
 from core.gpx_parser import is_gpx_video_shift_set, parse_gpx  # Hier hinzufügen!
+from core.layout_utils import detach_widget_from_splitter, reattach_widget_to_splitter
 
 from managers.overlay_manager import OverlayManager
 
@@ -4013,20 +4014,16 @@ class MainWindow(QMainWindow):
         # 1) Dialog schließen
         self._video_area_floating_dialog.close()
         self._video_area_floating_dialog = None
-    
-        # 2) Platzhalter entfernen
+
+        # 2) Platzhalter entfernen und Widget wieder im Splitter einhängen
         if self._video_placeholder is not None:
-            idx = self.left_v_layout.indexOf(self._video_placeholder)
-            if idx >= 0:
-                self.left_v_layout.removeWidget(self._video_placeholder)
-            self._video_placeholder.deleteLater()
-            self._video_placeholder = None
+            if reattach_widget_to_splitter(self.left_splitter, self.video_area_widget, self._video_placeholder):
+                self._video_placeholder.deleteLater()
+                self._video_placeholder = None
 
-        # 3) Video wieder einfügen (am selben Index)
-        #    Falls du es wieder ganz oben haben willst, kannst du idx=0 nehmen
-        self.left_v_layout.insertWidget(0, self.video_area_widget, 1)
-
-       
+        # 3) Fallback: falls kein Platzhalter vorhanden war, das Widget wieder an das Layout anfügen
+        if self._video_placeholder is None and self.left_splitter.indexOf(self.video_area_widget) < 0:
+            self.left_splitter.addWidget(self.video_area_widget)
 
 
     def _detach_video_area_widget(self):
@@ -4034,26 +4031,13 @@ class MainWindow(QMainWindow):
             # Schon abgekoppelt
             return
 
-        # 1) Platzhalter erstellen (falls du ihn farblich hervorheben willst)
-        #self._video_placeholder = QFrame()
-        #self._video_placeholder.setStyleSheet("background-color: #444;")
-
-        # 2) Index des video_area_widget im left_v_layout suchen
-        idx = self.left_v_layout.indexOf(self.video_area_widget)
-        if idx < 0:
-            # Falls nicht gefunden => wir brechen lieber ab
-            return
-            
-            
-        self.left_v_layout.removeWidget(self.video_area_widget)
         self._video_placeholder = QFrame()
-        self._video_placeholder.setStyleSheet("background-color: #444;")    
+        self._video_placeholder.setStyleSheet("background-color: #444;")
 
-        # 3) An dieser Position den Platzhalter einfügen
-        self.left_v_layout.insertWidget(idx, self._video_placeholder, 1)
-
-        # 4) Das video_area_widget aus dem Layout entfernen
-        #self.left_v_layout.removeWidget(self.video_area_widget)
+        if not detach_widget_from_splitter(self.left_splitter, self.video_area_widget, self._video_placeholder):
+            self._video_placeholder.deleteLater()
+            self._video_placeholder = None
+            return
 
         # 5) In einem neuen Dialog unterbringen
         dlg = DetachDialog(self)
@@ -4717,9 +4701,9 @@ class MainWindow(QMainWindow):
 
         else:
             if self._video_at_end:
-                # => Wir waren am Ende => also erst "stoppen"
-                self.on_stop()             # ruft dein Stop-Verhalten auf
-                self._video_at_end = False # Reset dieses Merkers
+                # Keep the player at its current position and clear the end-state.
+                # A manual stop/rewind is handled by the dedicated stop action.
+                self._video_at_end = False
             
             
             # => PLAY
@@ -4825,6 +4809,7 @@ class MainWindow(QMainWindow):
         self.video_control.set_playback_rate(self.current_rate)
 
     def _on_timeline_marker_moved(self, new_time_s: float):
+        self._video_at_end = False
         self.video_editor._jump_to_global_time(new_time_s)
         
     def _on_timeline_overlay_remove(self, start_s, end_s):
@@ -4855,6 +4840,7 @@ class MainWindow(QMainWindow):
             total_s = self.real_total_duration
     
         # 3) Aufruft der mpv-Funktion => "globaler" Sprung
+        self._video_at_end = False
         self.video_editor.set_time(total_s)
         #
         # Damit ruft Ihr intern mpv._jump_to_global_time(total_s) auf,
@@ -6407,19 +6393,14 @@ class MainWindow(QMainWindow):
     def _detach_map_widget(self):
         if self._map_floating_dialog is not None:
             return
-    
-        # Index des map_widget im Layout finden
-        idx = self.left_v_layout.indexOf(self.map_widget)
-        if idx < 0:
-            return
-    
-        # Platzhalter
+
         self._map_placeholder = QFrame()
         self._map_placeholder.setStyleSheet("background-color: #444;")
-    
-        # Platzhalter an die alte Stelle des map_widget
-        self.left_v_layout.insertWidget(idx, self._map_placeholder, 1)
-        self.left_v_layout.removeWidget(self.map_widget)
+
+        if not detach_widget_from_splitter(self.left_splitter, self.map_widget, self._map_placeholder):
+            self._map_placeholder.deleteLater()
+            self._map_placeholder = None
+            return
     
         # DetachDialog
         dlg = DetachDialog(self)
@@ -6465,14 +6446,12 @@ class MainWindow(QMainWindow):
         self._map_floating_dialog = None
     
         if self._map_placeholder:
-            idx = self.left_v_layout.indexOf(self._map_placeholder)
-            if idx >= 0:
-                self.left_v_layout.removeWidget(self._map_placeholder)
-            self._map_placeholder.deleteLater()
-            self._map_placeholder = None
-    
-        # Map wieder unten einfügen (z.B. am Ende des Layouts)
-        self.left_v_layout.addWidget(self.map_widget, 1)
+            if reattach_widget_to_splitter(self.left_splitter, self.map_widget, self._map_placeholder):
+                self._map_placeholder.deleteLater()
+                self._map_placeholder = None
+
+        if self._map_placeholder is None and self.left_splitter.indexOf(self.map_widget) < 0:
+            self.left_splitter.addWidget(self.map_widget)
     
     
     def _on_request_reattach_map(self):

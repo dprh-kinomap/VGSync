@@ -182,6 +182,7 @@ class VideoEditorWidget(QWidget):
         self._current_index = 0
         self.multi_durations = []
         self.boundaries = []
+        self._last_global_time_s = 0.0
 
         # Falls du end-file auswerten willst:
         self._player.observe_property('playlist-pos', self._on_playlist_pos_changed)
@@ -549,6 +550,8 @@ class VideoEditorWidget(QWidget):
         if not self.boundaries:
             return
 
+        self._last_global_time_s = wanted_s
+
         total = self.boundaries[-1]
         if wanted_s < 0:
             wanted_s = 0.0
@@ -689,22 +692,27 @@ class VideoEditorWidget(QWidget):
                 import mpv
                 if isinstance(e, mpv.ShutdownError):
                     print("[WARN] mpv core shutdown while reading time/properties")
-                    return 0.0
+                    return getattr(self, "_last_global_time_s", 0.0)
             except Exception:
                 pass
             # Generic fallback when property access fails
             print(f"[WARN] Failed to read mpv properties: {e}")
-            return 0.0
+            return getattr(self, "_last_global_time_s", 0.0)
+
         if clipIndex is None or clipIndex < 0:
-            return 0.0
+            return getattr(self, "_last_global_time_s", 0.0)
 
         # offset_prev = boundaries[clipIndex - 1] (0.0 wenn clipIndex==0)
         if clipIndex == 0:
             offset_prev = 0.0
-        else:
+        elif 0 < clipIndex <= len(self.boundaries):
             offset_prev = self.boundaries[clipIndex - 1]
-    
-        return offset_prev + local_s
+        else:
+            return getattr(self, "_last_global_time_s", 0.0)
+
+        global_s = offset_prev + local_s
+        self._last_global_time_s = global_s
+        return global_s
         
         
         # -------- Helpers: Speed / Zoom / Pan --------
