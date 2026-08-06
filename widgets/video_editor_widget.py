@@ -178,6 +178,7 @@ class VideoEditorWidget(QWidget):
         self._player.volume = 50
 
         self.is_playing = False
+        self._shutting_down = False
         self.playlist = []
         self._current_index = 0
         self.multi_durations = []
@@ -374,6 +375,8 @@ class VideoEditorWidget(QWidget):
         """
         Gehe zum playlist-Index 'index', pausiere + seek an den Anfang => 1. Frame
         """
+        if self._shutting_down:
+            return
         if not self.playlist or index < 0 or index >= len(self.playlist):
             return  # Ungültig => Abbruch
 
@@ -384,6 +387,8 @@ class VideoEditorWidget(QWidget):
     
         def do_seek():
             # 1) Prüfen, ob mpv noch ein Video hat + Position >=0
+            if self._shutting_down:
+                return
             if self._player.playlist_count == 0:
                 return
             if self._player.playlist_pos is None or self._player.playlist_pos < 0:
@@ -547,6 +552,8 @@ class VideoEditorWidget(QWidget):
         'wanted_s' ist die globale Zeit über alle Clips.
         Wir ermitteln clipIndex + local_s.
         """
+        if self._shutting_down:
+            return
         if not self.boundaries:
             return
 
@@ -588,6 +595,8 @@ class VideoEditorWidget(QWidget):
             self._player.command("playlist-play-index", str(clip_idx))
     
             def do_seek():
+                if self._shutting_down:
+                    return
                 if self._player.playlist_count == 0:
                     return
                 if self._player.playlist_pos is None or self._player.playlist_pos < 0:
@@ -610,6 +619,8 @@ class VideoEditorWidget(QWidget):
         mpv ruft diese Callback auf, sobald 'playlist-pos' wechselt.
         Falls wir am Ende sind, pos=None. Dann => play_ended-Signal?
         """
+        if self._shutting_down:
+            return
         if value is None or value < 0:
             # => wir sind evtl. am Ende der Playlist
             self.play_ended.emit()
@@ -619,7 +630,19 @@ class VideoEditorWidget(QWidget):
         print(f"[MPV] {level} {component}: {message}", end="")
     
     def _update_time_label(self):
-        if not self.playlist or self._player.playlist_count == 0:
+        if self._shutting_down:
+            return
+
+        try:
+            playlist_count = self._player.playlist_count
+        except mpv.ShutdownError:
+            self.shutdown_player(terminate=False)
+            return
+        except Exception as e:
+            print(f"[WARN] Failed to update time label: {e}")
+            return
+
+        if not self.playlist or playlist_count == 0:
             self.current_time_label.hide()
             return
         else:
@@ -640,11 +663,47 @@ class VideoEditorWidget(QWidget):
             self.current_time_label.setText(text_html)
             self._last_time_html = text_html
 
+    def shutdown_player(self, terminate: bool = True):
+        """
+        Stop UI callbacks from touching mpv while the app/widget is closing.
+        """
+        self._shutting_down = True
+        self.is_playing = False
+
+        if hasattr(self, "_time_timer") and self._time_timer:
+            self._time_timer.stop()
+
+        player = getattr(self, "_player", None)
+        if not player:
+            return
+
+        try:
+            player.unobserve_property("playlist-pos", self._on_playlist_pos_changed)
+        except Exception:
+            pass
+
+        if not terminate:
+            return
+
+        try:
+            if not player.core_shutdown:
+                player.terminate()
+        except Exception:
+            pass
+        finally:
+            self._player = None
+
+    def closeEvent(self, event):
+        self.shutdown_player()
+        super().closeEvent(event)
+
     def stop(self):
         """
         Wenn am Anfang ein Schnitt [0..X] existiert, springen wir an X,
         ansonsten an 0s des ersten Videos.
         """
+        if self._shutting_down:
+            return
         if not self.playlist:
             return
     
@@ -664,6 +723,8 @@ class VideoEditorWidget(QWidget):
             self._player.command("playlist-play-index", "0")
 
             def do_seek_zero():
+                if self._shutting_down:
+                    return
                 if self._player.playlist_count == 0:
                     return
                 if self._player.playlist_pos is None or self._player.playlist_pos < 0:
@@ -808,4 +869,3 @@ class VideoEditorWidget(QWidget):
         self.setCursor(Qt.ArrowCursor)
         super().mouseReleaseEvent(event)
 
-    

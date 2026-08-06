@@ -502,7 +502,8 @@ class MainWindow(QMainWindow):
         self._mapbox_key   = ""
         self._mapillary_key   = ""
         self._google_maps_key = ""
-        
+        self._map_key_sources = {}
+
         self._load_map_keys_from_settings()
         
         
@@ -1941,18 +1942,28 @@ class MainWindow(QMainWindow):
         enc_ma = s.value("mapillary/key", "", str)
         enc_gg = s.value("googleMaps/key", "", str)
 
-        self._maptiler_key = decode(enc_mt)
-        self._bing_key     = decode(enc_bi)
-        self._mapbox_key   = decode(enc_mb)
-        self._mapillary_key   = decode(enc_ma)
-        self._google_maps_key = decode(enc_gg)
+        self._map_key_sources = {}
+
+        def load_key(provider, encoded_key, env_name):
+            saved_key = decode(encoded_key)
+            if saved_key:
+                self._map_key_sources[provider] = "settings"
+                return saved_key
+
+            env_key = os.environ.get(env_name, "")
+            if env_key:
+                self._map_key_sources[provider] = "default"
+                return env_key
+
+            self._map_key_sources[provider] = "empty"
+            return ""
 
         # Fallback to environment variables when QSettings do not contain keys.
-        self._maptiler_key = self._maptiler_key or os.environ.get("KVR_MAPTILER_KEY", "")
-        self._bing_key = self._bing_key or os.environ.get("KVR_BING_KEY", "")
-        self._mapbox_key = self._mapbox_key or os.environ.get("KVR_MAPBOX_KEY", "")
-        self._mapillary_key = self._mapillary_key or os.environ.get("KVR_MAPILLARY_KEY", "")
-        self._google_maps_key = self._google_maps_key or os.environ.get("KVR_GOOGLE_MAPS_KEY", "")
+        self._maptiler_key = load_key("mapTiler", enc_mt, "KVR_MAPTILER_KEY")
+        self._bing_key = load_key("bing", enc_bi, "KVR_BING_KEY")
+        self._mapbox_key = load_key("mapbox", enc_mb, "KVR_MAPBOX_KEY")
+        self._mapillary_key = load_key("mapillary", enc_ma, "KVR_MAPILLARY_KEY")
+        self._google_maps_key = load_key("googleMaps", enc_gg, "KVR_GOOGLE_MAPS_KEY")
     
     def _save_map_key_to_settings(self, provider: str, plain_key: str):
         """
@@ -1976,6 +1987,7 @@ class MainWindow(QMainWindow):
         elif provider == "googleMaps":
             s.setValue("googleMaps/key", enc)
             self._google_maps_key = plain_key
+        self._map_key_sources[provider] = "settings" if plain_key else "empty"
 
         # Jetzt sofort updaten => an map_page.html schicken
         self._update_map_page_keys()    
@@ -2034,7 +2046,10 @@ class MainWindow(QMainWindow):
         vbox.addWidget(lbl)
 
         edit = QLineEdit()
-        edit.setText(current_val)
+        if self._map_key_sources.get(provider_name) == "default":
+            edit.setPlaceholderText("Using bundled default key")
+        else:
+            edit.setText(current_val)
         vbox.addWidget(edit)
 
         btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
@@ -2042,6 +2057,9 @@ class MainWindow(QMainWindow):
 
         def on_ok():
             new_key = edit.text().strip()
+            if self._map_key_sources.get(provider_name) == "default" and not new_key:
+                dlg.accept()
+                return
             self._save_map_key_to_settings(provider_name, new_key)
             dlg.accept()
 
@@ -3319,6 +3337,18 @@ class MainWindow(QMainWindow):
             self._edit_mode_sync_checked = checked
         elif self._current_view_mode == "street_view":
             self._street_view_mode_sync_checked = checked
+
+    def _is_gpx_selection_video_sync_enabled(self) -> bool:
+        action_enabled = (
+            hasattr(self, "action_new_pts_video_time")
+            and self.action_new_pts_video_time.isChecked()
+        )
+        return (
+            bool(action_enabled)
+            and bool(self._autoSyncNewPointsWithVideoTime)
+            and self.playlist_counter > 0
+            and is_gpx_video_shift_set()
+        )
         
    
     
@@ -3556,7 +3586,7 @@ class MainWindow(QMainWindow):
         self.gpx_widget.gpx_list.select_row_in_pause(new_index)
         self.chart.highlight_gpx_index(new_index)
         self._sync_street_view_to_index(new_index)
-        if self._autoSyncNewPointsWithVideoTime and self.playlist_counter > 0:
+        if self._is_gpx_selection_video_sync_enabled():
             self.on_map_sync_any()
 
 
@@ -4500,7 +4530,7 @@ class MainWindow(QMainWindow):
             self.map_widget.show_blue(index, do_center=True)
             #self.map_widget.show_blue(index)
             self.chart.highlight_gpx_index(index)
-            if self._autoSyncNewPointsWithVideoTime and self.playlist_counter > 0:
+            if self._is_gpx_selection_video_sync_enabled():
                 self.on_map_sync_any()
         else:
             # Wenn Video gerade läuft => evtl. jump dorthin
@@ -5336,6 +5366,9 @@ class MainWindow(QMainWindow):
         4) => on_time_hms_set_clicked => Video
         """
         print("[DEBUG] on_map_sync_any() called (map sync)")
+        if not is_gpx_video_shift_set():
+            print("[DEBUG] on_map_sync_any => GPX/video shift undefined => no video sync.")
+            return
 
         # 1) Which point in the map? (blue_idx)
         idx_map = self.map_widget._blue_idx
@@ -6721,6 +6754,11 @@ class MainWindow(QMainWindow):
         """
         Ask the user on window close whether to save a modified project.
         """
+        def shutdown_video_editor():
+            editor = getattr(self, "video_editor", None)
+            if editor and hasattr(editor, "shutdown_player"):
+                editor.shutdown_player()
+
         try:
             if getattr(self, "_project_dirty", False):
                 msg = QMessageBox(self)
@@ -6740,9 +6778,11 @@ class MainWindow(QMainWindow):
                     else:
                         self.save_project_as()
                     # Nach erfolgreichem Speichern schließen
+                    shutdown_video_editor()
                     event.accept()
                     return
                 elif clicked is discard_btn:
+                    shutdown_video_editor()
                     event.accept()
                     return
                 else:
@@ -6751,9 +6791,11 @@ class MainWindow(QMainWindow):
                     return
         except Exception:
             # Im Fehlerfall App trotzdem schließen, um nicht hängen zu bleiben
+            shutdown_video_editor()
             event.accept()
 
         # Kein Dirty-Flag oder schon behandelt
+        shutdown_video_editor()
         super().closeEvent(event)
     
     def process_open_project(self, filename: str):
@@ -6833,8 +6875,7 @@ class MainWindow(QMainWindow):
 
             # GPX/Video shift (s)
             set_gpx_video_shift(project_data.get("gpx_video_shift", None))
-            if(is_gpx_video_shift_set()):
-                self.enableVideoGpxSync(True)
+            self.enableVideoGpxSync(is_gpx_video_shift_set())
 
             # 5. Overlays laden
             overlays = project_data.get("overlays", [])

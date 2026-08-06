@@ -917,15 +917,28 @@
         source: new ol.source.Vector()
       });
 
+      const defaultInteractions = (
+        ol.interaction.defaults &&
+        (ol.interaction.defaults.defaults || ol.interaction.defaults)
+      );
+
       map = new ol.Map({
         target: "map",
         layers: [osmLayer, satLayer, vectorLayer],
+        interactions: defaultInteractions
+          ? defaultInteractions({doubleClickZoom: false})
+          : undefined,
         view: new ol.View({
           center: ol.proj.fromLonLat([10,50]),
           zoom: 5,
           maxZoom: 30
         })
       });
+
+      map.getViewport().addEventListener("dblclick", function(evt){
+        evt.preventDefault();
+        evt.stopPropagation();
+      }, true);
 
       initModify();
 
