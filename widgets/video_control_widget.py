@@ -1,28 +1,28 @@
 # -*- coding: utf-8 -*-
 #
-# This file is part of KVRouite.
+# This file is part of VGSync.
 #
 # Copyright (C) 2025 by Bernd Eller
 #
-# KVRouite is free software: you can redistribute it and/or modify
+# VGSync is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
 # the Free Software Foundation, either version 3 of the License, or
 # (at your option) any later version.
 #
-# KVRouite is distributed in the hope that it will be useful,
+# VGSync is distributed in the hope that it will be useful,
 # but WITHOUT ANY WARRANTY; without even the implied warranty of
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
 # See the GNU General Public License for more details.
 #
 # You should have received a copy of the GNU General Public License
-# along with KVRouite. If not, see <https://www.gnu.org/licenses/>.
+# along with VGSync. If not, see <https://www.gnu.org/licenses/>.
 #
 
 # widgets/video_control_widget.py
 
 from PySide6.QtWidgets import (
     QWidget, QHBoxLayout, QPushButton, QLineEdit, QLabel,
-    QStyle, QDialog, QVBoxLayout, QFrame
+    QStyle, QDialog, QVBoxLayout, QFrame, QMenu, QToolButton
 )
 from PySide6.QtCore import Signal, Qt, QRegularExpression, QSize
 from PySide6.QtGui import QRegularExpressionValidator, QCursor, QIcon
@@ -38,6 +38,7 @@ class VideoControlWidget(QWidget):
     goto_video_end_clicked   = Signal()
     step_value_changed       = Signal(str)
     multiplier_value_changed = Signal(str)
+    playback_rate_changed    = Signal(float)
     backward_clicked         = Signal()
     forward_clicked          = Signal()
     goToEndClicked           = Signal()
@@ -60,10 +61,23 @@ class VideoControlWidget(QWidget):
         layout.setContentsMargins(5,5,5,5)
         layout.setSpacing(5)
 
-        self.play_pause_button = QPushButton()
+        self._playback_rate_values = [1.0, 2.0, 4.0, 8.0, 16.0, 32.0]
+        self._playback_rate_index = 0
+        self._playback_rate_actions = {}
+
+        self.play_pause_button = QToolButton()
         self.play_pause_button.setIcon(
             self.style().standardIcon(QStyle.SP_MediaPlay)
         )
+        self.play_pause_button.setToolTip("Play/Pause. Hold to choose playback speed.")
+        self.play_pause_button.setPopupMode(QToolButton.DelayedPopup)
+        self._playback_rate_menu = QMenu(self.play_pause_button)
+        for rate in self._playback_rate_values:
+            action = self._playback_rate_menu.addAction(self._format_playback_rate(rate))
+            action.setCheckable(True)
+            action.triggered.connect(lambda _checked=False, r=rate: self._on_playback_rate_selected(r))
+            self._playback_rate_actions[rate] = action
+        self.play_pause_button.setMenu(self._playback_rate_menu)
         self.play_pause_button.clicked.connect(self.play_pause_clicked.emit)
         layout.addWidget(self.play_pause_button)
         
@@ -337,6 +351,30 @@ class VideoControlWidget(QWidget):
         new_value = self._multiplier_values[self._multiplier_index]
         self.multiplier_button.setText(new_value)
         self.multiplier_value_changed.emit(new_value)
+
+    def _on_playback_rate_selected(self, rate: float):
+        self.set_playback_rate(rate)
+        self.playback_rate_changed.emit(rate)
+
+    def set_playback_rate(self, rate: float):
+        if not hasattr(self, "_playback_rate_actions"):
+            return
+
+        try:
+            rate = float(rate)
+        except (TypeError, ValueError):
+            rate = 1.0
+
+        if rate in self._playback_rate_values:
+            self._playback_rate_index = self._playback_rate_values.index(rate)
+        for action_rate, action in self._playback_rate_actions.items():
+            action.setChecked(action_rate == rate)
+        self.play_pause_button.setToolTip(
+            f"Play/Pause. Hold to choose playback speed. Current speed: {self._format_playback_rate(rate)}"
+        )
+
+    def _format_playback_rate(self, rate: float) -> str:
+        return f"{rate:g}x"
     
     def set_hms_time(self, hh: int, mm: int, ss: int):
         self._current_h = hh

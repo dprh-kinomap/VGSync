@@ -1,21 +1,21 @@
 # -*- coding: utf-8 -*-
 #
-# This file is part of KVRouite.
+# This file is part of VGSync.
 #
 # Copyright (C) 2025 by Bernd Eller
 #
-# KVRouite is free software: you can redistribute it and/or modify
+# VGSync is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
 # the Free Software Foundation, either version 3 of the License, or
 # (at your option) any later version.
 #
-# KVRouite is distributed in the hope that it will be useful,
+# VGSync is distributed in the hope that it will be useful,
 # but WITHOUT ANY WARRANTY; without even the implied warranty of
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
 # See the GNU General Public License for more details.
 #
 # You should have received a copy of the GNU General Public License
-# along with KVRouite. If not, see <https://www.gnu.org/licenses/>.
+# along with VGSync. If not, see <https://www.gnu.org/licenses/>.
 #
 
 import math
@@ -518,7 +518,6 @@ class GPXListWidget(QWidget):
                         new_dt = base_dt + timedelta(seconds=rel_s)
                         old_dt = self._gpx_data[0]["time"]
                         delta = (new_dt - old_dt).total_seconds()
-                        from core.gpx_parser import set_gpx_video_shift, get_gpx_video_shift
                         set_gpx_video_shift(get_gpx_video_shift() - delta)
                         print(f"[DEBUG] Updated gpx_video_shift by {-delta} seconds (new shift: {get_gpx_video_shift()})")
                     except Exception as e:

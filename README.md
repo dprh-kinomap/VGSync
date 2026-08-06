@@ -1,4 +1,4 @@
-KVRouite
+VGSync
 ======
 
 > **Note:** This project was **formerly known as [VGSync](https://github.com/ridewithoutstomach/VGSync)**.  
@@ -7,14 +7,14 @@ KVRouite
 
 ![Kinomap Logo](./doc/Kinomap_Logo.png)
 
-KVRouite is a Python-based desktop application designed to synchronize GPX data with video footage. Its a Video and GPX synchronising tool. It uses "mpv" for high-precision video playback and "ffmpeg" for media processing.
+VGSync is a Python-based desktop application designed to synchronize GPX data with video footage. Its a Video and GPX synchronising tool. It uses "mpv" for high-precision video playback and "ffmpeg" for media processing.
 
-![KVRouite Main Window](./screenshots/mainwindow.png)
+![VGSync Main Window](./screenshots/mainwindow.png)
 
 - Version: see Releases
 - Platforms: Windows 64-bit (official support), Linux (tested on Kubuntu 24.04.2)
 - License: GNU General Public License v3.0 or later (GPL-3.0-or-later)
-- KVRouite helps action cam users and outdoor enthusiasts to synchronize their recorded videos with GPS data for perfect route visualization and editing.
+- VGSync helps action cam users and outdoor enthusiasts to synchronize their recorded videos with GPS data for perfect route visualization and editing.
 -------------------------------------------------------------------------------
 
 Requirements
@@ -48,22 +48,22 @@ sudo apt install ffmpeg libmpv-dev python3-venv
 
 You can **either**:
 
-- Download the latest ZIP from [GitHub Releases](https://github.com/ridewithoutstomach/KVRouite/releases) and extract it  
+- Download the latest ZIP from [GitHub Releases](https://github.com/ridewithoutstomach/VGSync/releases) and extract it  
 **or**
 - Clone the repository:
 
 ```bash
-git clone https://github.com/ridewithoutstomach/KVRouite.git
+git clone https://github.com/ridewithoutstomach/VGSync.git
 ```
 
 #### Setup and Run
 
 ```bash
-cd KVRouite
+cd VGSync
 python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
-python KVRouite.py
+python VGSync.py
 ```
 
 ---
@@ -76,19 +76,19 @@ python KVRouite.py
 Open **Command Prompt**, then:
 
 ```cmd
-cd KVRouite
+cd VGSync
 python -m venv venv
 venv\Scripts\activate
 pip install -r requirements.txt
-python KVRouite.py
+python VGSync.py
 ```
 
 ---
 
 ### ❗ Important Notes
 
-- Always create and activate the virtual environment **inside** the `KVRouite` folder.
-- Do **not** run `python KVRouite.py` outside the project folder.
+- Always create and activate the virtual environment **inside** the `VGSync` folder.
+- Do **not** run `python VGSync.py` outside the project folder.
 - On **Linux**, make sure required packages like `ffmpeg` and `libmpv-dev` are installed.
 
 
@@ -98,21 +98,21 @@ python KVRouite.py
 Install External Binaries (Windows)
 --------------------------
 
-Download the following ZIP files from the latest KVRouite Release:
+Download the following ZIP files from the latest VGSync Release:
 
 - ffmpeg.zip → extract into "ffmpeg/" folder
 - mpv.zip → extract into "mpv/" folder
 
-The "ffmpeg/" and "mpv/" folders include guidance files ("KVRouite_ffmpeg.txt" and "KVRouite_mpv.txt") describing the expected contents.
+The "ffmpeg/" and "mpv/" folders include guidance files ("VGSync_ffmpeg.txt" and "VGSync_mpv.txt") describing the expected contents.
 
 -------------------------------------------------------------------------------
 
 Running the Application
 ------------------------
 
-To start KVRouite:
+To start VGSync:
 
-    python KVRouite.py
+    python VGSync.py
 
 Important for Linux users:
 After launching the application, please enable "Use Software OpenGL" 
@@ -126,9 +126,9 @@ Windows Executable
 If you prefer not to install Python or manage dependencies manually,
 you can use the pre-built Windows binary:
 
-1. Download the ZIP file (e.g., "KVRouite_3.27_Win_x64.zip") from the GitHub Releases page.
+1. Download the ZIP file (e.g., "VGSync_3.27_Win_x64.zip") from the GitHub Releases page.
 2. Extract the ZIP file into any folder.
-3. Double-click "KVRouite.exe" to run the application.
+3. Double-click "VGSync.exe" to run the application.
 
 -------------------------------------------------------------------------------
 
@@ -141,7 +141,7 @@ To create your own Windows executable:
 
 The resulting executable will be located at:
 
-    dist/KVRouite_3.27/KVRouite.exe
+    dist/VGSync_3.27/VGSync.exe
 
 -------------------------------------------------------------------------------
 
@@ -202,9 +202,11 @@ For questions, suggestions, or contributions, please open an issue or pull reque
 
 ## Legal / Contact
 
-Project: **KVRouite — Kinomap Video Route Suite** (officially supported by Kinomap)
+Project: **VGSync — Kinomap Video Route Suite** (officially supported by Kinomap)
 
-**Imprint (DE):** https://kvrouite.com/impressum.html  
+Copyright (C) 2026 Kinomap
+
+**Imprint (DE):** https://kvrouite.com/impressum.html
 **Privacy:** https://kvrouite.com/privacy.html
 
 No cookies/trackers are set on the project website beyond what is technically necessary.  

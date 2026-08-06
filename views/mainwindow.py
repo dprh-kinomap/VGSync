@@ -1,21 +1,21 @@
 # -*- coding: utf-8 -*-
 #
-# This file is part of KVRouite.
+# This file is part of VGSync.
 #
 # Copyright (C) 2025 by Bernd Eller
 #
-# KVRouite is free software: you can redistribute it and/or modify
+# VGSync is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
 # the Free Software Foundation, either version 3 of the License, or
 # (at your option) any later version.
 #
-# KVRouite is distributed in the hope that it will be useful,
+# VGSync is distributed in the hope that it will be useful,
 # but WITHOUT ANY WARRANTY; without even the implied warranty of
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
 # See the GNU General Public License for more details.
 #
 # You should have received a copy of the GNU General Public License
-# along with KVRouite. If not, see <https://www.gnu.org/licenses/>.
+# along with VGSync. If not, see <https://www.gnu.org/licenses/>.
 #
 
 # views/mainwindow.py
@@ -36,8 +36,6 @@ import tempfile
 import datetime
 import time
 import math
-import platform
-import subprocess
 import re
 import tarfile
 import uuid
@@ -85,8 +83,6 @@ from PySide6.QtWebChannel import QWebChannel
 
 #updates
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkRequest, QNetworkReply
-from PySide6.QtCore import QUrl, QTimer
-from PySide6.QtGui import QDesktopServices
 
 from .encoder_setup_dialog import EncoderSetupDialog  # Import Dialog
 
@@ -105,6 +101,7 @@ from managers.step_manager import StepManager
 from managers.end_manager import EndManager
 from managers.cut_manager import VideoCutManager
 from core.gpx_parser import is_gpx_video_shift_set, parse_gpx  # Hier hinzufügen!
+from core.layout_utils import detach_widget_from_splitter, reattach_widget_to_splitter
 
 from managers.overlay_manager import OverlayManager
 
@@ -509,7 +506,8 @@ class MainWindow(QMainWindow):
         self._mapbox_key   = ""
         self._mapillary_key   = ""
         self._google_maps_key = ""
-        
+        self._map_key_sources = {}
+
         self._load_map_keys_from_settings()
         
         
@@ -529,7 +527,7 @@ class MainWindow(QMainWindow):
         
         
         
-        self.setWindowTitle(f"KVRouite v{APP_VERSION} - the Easy Video and GPX-Sync Tool")
+        self.setWindowTitle(f"VGSync v{APP_VERSION} - the Easy Video and GPX-Sync Tool")
             
         
         self._sync_prompt_answer = None   # None = unknown / not asked yet, True/False = user's first answer
@@ -561,7 +559,7 @@ class MainWindow(QMainWindow):
                 "gpx_video_shift": None,
                 "markB": None,
                 "markE": None,
-                "sync_enabled": False,         # per-Slot „Sync all with video“
+                "sync_enabled": True,          # per-Slot „Sync all with video“
                 "sync_marker": None,           # per-Slot „Set Sync“ (Index)
             },
             2: {
@@ -859,7 +857,7 @@ class MainWindow(QMainWindow):
         temp_dir_menu.addAction(action_set_temp_dir)
 
         action_clear_temp_dir = QAction("Reset Temp Dir", self)
-        action_clear_temp_dir.setStatusTip("reset the temp-direrctory to KVRouite-standard")
+        action_clear_temp_dir.setStatusTip("reset the temp-direrctory to VGSync-standard")
         action_clear_temp_dir.triggered.connect(self._on_clear_temp_dir)
         temp_dir_menu.addAction(action_clear_temp_dir)
 
@@ -932,7 +930,7 @@ class MainWindow(QMainWindow):
         self.action_new_pts_video_time = QAction("Sync all with video", self)
         self.action_new_pts_video_time.setStatusTip("If activates we automatically sync the video to a select gpx point without using V-Sync-Button")
         self.action_new_pts_video_time.setCheckable(True)
-        self.action_new_pts_video_time.setChecked(False)  # Standard = OFF
+        self.action_new_pts_video_time.setChecked(True)   # Standard = ON (empty GPX)
         self.action_new_pts_video_time.triggered.connect(self._on_sync_point_video_time_toggled)
         setup_menu.addAction(self.action_new_pts_video_time)               
         
@@ -980,7 +978,7 @@ class MainWindow(QMainWindow):
         help_menu.addAction(docs_action)
         
         tutorials_action = QAction("Youtube-Tutorials", self)
-        tutorials_action.setStatusTip("Open KVRouite YouTube channel with tutorials")
+        tutorials_action.setStatusTip("Open VGSync YouTube channel with tutorials")
         tutorials_action.triggered.connect(self._on_open_tutorials)
         help_menu.addAction(tutorials_action)
         
@@ -995,17 +993,17 @@ class MainWindow(QMainWindow):
 
         self.action_auto_update_check = QAction("Auto Check for Updates", self, checkable=True)
         self.action_auto_update_check.setStatusTip("Check for updates on startup")
-        s = QSettings("KVRouite","KVRouite")
+        s = QSettings("VGSync","VGSync")
         auto_on = s.value("updates/auto_check", True, type=bool)
         self.action_auto_update_check.setChecked(bool(auto_on))
         self.action_auto_update_check.toggled.connect(
-            lambda on: QSettings("KVRouite","KVRouite").setValue("updates/auto_check", bool(on))
+            lambda on: QSettings("VGSync","VGSync").setValue("updates/auto_check", bool(on))
         )
         help_menu.addAction(self.action_auto_update_check)
 
         # Default-Repo fest verdrahten (einmalig setzen, wenn leer)
         if not s.value("updates/repo", None, type=str):
-            s.setValue("updates/repo", "ridewithoutstomach/KVRouite")
+            s.setValue("updates/repo", "ridewithoutstomach/VGSync")
 
         # Auto-Check einige Sekunden nach Start
         if self.action_auto_update_check.isChecked():
@@ -1088,12 +1086,17 @@ class MainWindow(QMainWindow):
         # Fertig in den Video-Bereich
         video_area_layout.addWidget(timeline_control_widget, stretch=15)
         
-        # Alles in den oberen Teil der linken Spalte
-        self.left_v_layout.addWidget(self.video_area_widget, stretch=1)
-        
         # Unten: Map (50%)
         self.map_widget = MapWidget(mainwindow=self, parent=None)
-        self.left_v_layout.addWidget(self.map_widget, stretch=1)
+        
+        # Draggable separator between video and map
+        self.left_splitter = QSplitter(Qt.Vertical, left_column_widget)
+        self.left_splitter.addWidget(self.video_area_widget)
+        self.left_splitter.addWidget(self.map_widget)
+        self.left_splitter.setStretchFactor(0, 1)
+        self.left_splitter.setStretchFactor(1, 1)
+        self.left_splitter.setSizes([500, 500])  # default: 50/50 like before
+        self.left_v_layout.addWidget(self.left_splitter)
         
         # ============== Rechte Spalte (Chart + GPX) ==============
         #
@@ -1110,7 +1113,6 @@ class MainWindow(QMainWindow):
         self.right_top_view_tabs.addTab("Street View")
         self.right_top_view_tabs.currentChanged.connect(self._on_right_top_view_tab_changed)
         right_top_tabs_row.addWidget(self.right_top_view_tabs)
-        self.right_v_layout.addLayout(right_top_tabs_row)
         
         # Oben: Chart (40%) => Stretch 2
         self.chart = ChartWidget()
@@ -1138,7 +1140,12 @@ class MainWindow(QMainWindow):
         self.street_view_view.loadFinished.connect(self._on_street_view_page_loaded)
         self.right_top_stack.addWidget(self.street_view_widget)
 
-        self.right_v_layout.addWidget(self.right_top_stack, stretch=2)
+        self.right_top_widget = QWidget()
+        self.right_top_layout = QVBoxLayout(self.right_top_widget)
+        self.right_top_layout.setContentsMargins(0, 0, 0, 0)
+        self.right_top_layout.setSpacing(0)
+        self.right_top_layout.addLayout(right_top_tabs_row)
+        self.right_top_layout.addWidget(self.right_top_stack)
         self._street_view_sync_timer = QTimer(self)
         self._street_view_sync_timer.setInterval(400)
         self._street_view_sync_timer.timeout.connect(self._mirror_street_view_marker_to_left_map)
@@ -1215,7 +1222,15 @@ class MainWindow(QMainWindow):
 
         
         self.bottom_right_layout.addWidget(self.gpx_widget, stretch=5)
-        self.right_v_layout.addWidget(self.bottom_right_widget, stretch=3)
+
+        # Draggable separator between chart/street-view and GPX section
+        self.right_splitter = QSplitter(Qt.Vertical, right_column_widget)
+        self.right_splitter.addWidget(self.right_top_widget)
+        self.right_splitter.addWidget(self.bottom_right_widget)
+        self.right_splitter.setStretchFactor(0, 2)
+        self.right_splitter.setStretchFactor(1, 3)
+        self.right_splitter.setSizes([400, 600])  # default: ~40/60 like before
+        self.right_v_layout.addWidget(self.right_splitter)
         self.right_top_view_tabs.setCurrentIndex(0)
         
         #
@@ -1250,7 +1265,7 @@ class MainWindow(QMainWindow):
         #
         self.chart.markerClicked.connect(self._on_chart_marker_clicked)
         self.chart.set_gpx_data([])
-        s = QSettings("KVRouite", "KVRouite")
+        s = QSettings("VGSync", "VGSync")
         speed_cap = s.value("chart/speedCap", 70.0, type=float)
         self.chart.set_speed_cap(speed_cap)
         # Elevation edit on chart
@@ -1339,6 +1354,7 @@ class MainWindow(QMainWindow):
         self.video_control.goto_video_end_clicked.connect(self.on_goto_video_end_clicked)
         self.video_control.step_value_changed.connect(self.on_step_mode_changed)
         self.video_control.multiplier_value_changed.connect(self.on_multiplier_changed)
+        self.video_control.playback_rate_changed.connect(self.on_playback_rate_changed)
         self.video_control.backward_clicked.connect(self.step_manager.step_backward)
         self.video_control.forward_clicked.connect(self.step_manager.step_forward)
         
@@ -1380,6 +1396,7 @@ class MainWindow(QMainWindow):
         self.vlc_speeds = [0.5, 0.67, 1.0, 1.5, 2.0, 4.0, 8.0, 16.0, 32.0]
         self.speed_index = 2
         self.current_rate = self.vlc_speeds[self.speed_index]
+        self.video_control.set_playback_rate(self.current_rate)
 
         # Video-Abspiel-Ende
         self.video_editor.play_ended.connect(self.on_play_ended)
@@ -1392,7 +1409,6 @@ class MainWindow(QMainWindow):
         self.timeline.markerMoved.connect(self._on_timeline_marker_moved)
         self.video_control.timeHMSSetClicked.connect(self.on_time_hms_set_clicked)
         
-        self.gpx_widget.gpx_list.rowClickedInPause.connect(self._on_gpx_list_pause_clicked)
         self.map_widget.pointClickedInPause.connect(self._on_map_pause_clicked)
         
         self.gpx_control.chTimeClicked.connect(self.gpx_control.on_chTime_clicked_gpx)
@@ -1432,7 +1448,7 @@ class MainWindow(QMainWindow):
         marker_s = self.timeline.marker_position()
 
         # 1) Xfade-Länge aus Encoder-Settings
-        s = QSettings("KVRouite", "KVRouite")
+        s = QSettings("VGSync", "VGSync")
         try:
             xfade_sec = s.value("encoder/xfade", 2, type=int)
         except Exception:
@@ -1544,7 +1560,7 @@ class MainWindow(QMainWindow):
         request = urllib.request.Request(
             url,
             headers={
-                "User-Agent": "KVRouite/1.0 (location search via OSM Nominatim)"
+                "User-Agent": "VGSync/1.0 (location search via OSM Nominatim)"
             }
         )
         with urllib.request.urlopen(request, timeout=15) as resp:
@@ -1556,6 +1572,53 @@ class MainWindow(QMainWindow):
             return
 
         query = query.strip()
+        # Detect direct coordinate input (e.g. "48.123, 11.456" or a list of such pairs)
+        try:
+            coord_pairs = re.findall(r"(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)", query)
+            pts = []
+            for lat_s, lon_s in coord_pairs:
+                try:
+                    lat = float(lat_s)
+                    lon = float(lon_s)
+                except Exception:
+                    continue
+                if -90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0:
+                    pts.append({"lat": lat, "lon": lon, "ele": 0.0, "time": None})
+
+            # If multiple coordinate pairs were provided, import as GPX track
+            if len(pts) >= 2:
+                from core.gpx_parser import recalc_gpx_data
+                recalc_gpx_data(pts)
+                # place into slot 1 (consistent with other GPX loads)
+                try:
+                    self._gpx_slots[1]["gpx_data"] = pts
+                    self._gpx_slots[1]["gpx_video_shift"] = None
+                    self._gpx_slots[1]["markB"] = None
+                    self._gpx_slots[1]["markE"] = None
+                    self._last_gpx_load_mode = "new"
+                    if self._active_gpx_slot == 1:
+                        self._apply_slot_to_ui()
+                    else:
+                        self.switch_gpx_slot(1)
+                except Exception:
+                    # fallback: directly integrate into UI
+                    try:
+                        self._set_gpx_data(pts)
+                    except Exception:
+                        pass
+
+                QMessageBox.information(self, "Import coordinates", f"Imported {len(pts)} coordinate points as GPX.")
+                return
+
+            # Single coordinate pair -> act like a normal location center
+            if len(pts) == 1:
+                lat = pts[0]["lat"]
+                lon = pts[0]["lon"]
+                if self.map_widget:
+                    self.map_widget.center_on_location(lat, lon, zoom=15)
+                return
+        except Exception:
+            pass
         results = []
         try:
             # First try standard search
@@ -1768,7 +1831,7 @@ class MainWindow(QMainWindow):
         self.street_view_view.page().runJavaScript(js_get_coords, 0, _on_coords)
         
     def _on_show_mpv_path(self):
-        s = QSettings("KVRouite", "KVRouite")
+        s = QSettings("VGSync", "VGSync")
         path_stored = s.value("paths/mpv", "", type=str)
         if path_stored and os.path.isfile(os.path.join(path_stored, "libmpv-2.dll")):
             msg = f"Currently stored libmpv path:\n{path_stored}"
@@ -1796,7 +1859,7 @@ class MainWindow(QMainWindow):
             return
     
         # -> Okay, wir speichern es
-        s = QSettings("KVRouite", "KVRouite")
+        s = QSettings("VGSync", "VGSync")
         s.setValue("paths/mpv", folder)
         QMessageBox.information(self, "libmpv Path set",
             f"libmpv-2.dll path set to:\n{folder}\n\n"
@@ -1804,7 +1867,7 @@ class MainWindow(QMainWindow):
 
 
     def _on_clear_mpv_path(self):
-        s = QSettings("KVRouite", "KVRouite")
+        s = QSettings("VGSync", "VGSync")
         s.remove("paths/mpv")
         QMessageBox.information(self, "libmpv Path cleared",
             "The libmpv path has been removed from QSettings.\n"
@@ -1872,7 +1935,7 @@ class MainWindow(QMainWindow):
          - mapbox/key
         (jeweils Base64-kodiert) und schreibt sie in self._maptiler_key etc.
         """
-        s = QSettings("KVRouite", "KVRouite")
+        s = QSettings("VGSync", "VGSync")
 
         def decode(b64text):
             if not b64text:
@@ -1888,24 +1951,34 @@ class MainWindow(QMainWindow):
         enc_ma = s.value("mapillary/key", "", str)
         enc_gg = s.value("googleMaps/key", "", str)
 
-        self._maptiler_key = decode(enc_mt)
-        self._bing_key     = decode(enc_bi)
-        self._mapbox_key   = decode(enc_mb)
-        self._mapillary_key   = decode(enc_ma)
-        self._google_maps_key = decode(enc_gg)
+        self._map_key_sources = {}
+
+        def load_key(provider, encoded_key, env_name):
+            saved_key = decode(encoded_key)
+            if saved_key:
+                self._map_key_sources[provider] = "settings"
+                return saved_key
+
+            env_key = os.environ.get(env_name, "")
+            if env_key:
+                self._map_key_sources[provider] = "default"
+                return env_key
+
+            self._map_key_sources[provider] = "empty"
+            return ""
 
         # Fallback to environment variables when QSettings do not contain keys.
-        self._maptiler_key = self._maptiler_key or os.environ.get("KVR_MAPTILER_KEY", "")
-        self._bing_key = self._bing_key or os.environ.get("KVR_BING_KEY", "")
-        self._mapbox_key = self._mapbox_key or os.environ.get("KVR_MAPBOX_KEY", "")
-        self._mapillary_key = self._mapillary_key or os.environ.get("KVR_MAPILLARY_KEY", "")
-        self._google_maps_key = self._google_maps_key or os.environ.get("KVR_GOOGLE_MAPS_KEY", "")
+        self._maptiler_key = load_key("mapTiler", enc_mt, "KVR_MAPTILER_KEY")
+        self._bing_key = load_key("bing", enc_bi, "KVR_BING_KEY")
+        self._mapbox_key = load_key("mapbox", enc_mb, "KVR_MAPBOX_KEY")
+        self._mapillary_key = load_key("mapillary", enc_ma, "KVR_MAPILLARY_KEY")
+        self._google_maps_key = load_key("googleMaps", enc_gg, "KVR_GOOGLE_MAPS_KEY")
     
     def _save_map_key_to_settings(self, provider: str, plain_key: str):
         """
         Speichert den Key in Base64, z. B. provider='mapTiler'|'bing'|'mapbox'.
         """
-        s = QSettings("KVRouite", "KVRouite")
+        s = QSettings("VGSync", "VGSync")
         enc = base64.b64encode(plain_key.encode("utf-8")).decode("utf-8")
 
         if provider == "mapTiler":
@@ -1923,6 +1996,7 @@ class MainWindow(QMainWindow):
         elif provider == "googleMaps":
             s.setValue("googleMaps/key", enc)
             self._google_maps_key = plain_key
+        self._map_key_sources[provider] = "settings" if plain_key else "empty"
 
         # Jetzt sofort updaten => an map_page.html schicken
         self._update_map_page_keys()    
@@ -1981,7 +2055,10 @@ class MainWindow(QMainWindow):
         vbox.addWidget(lbl)
 
         edit = QLineEdit()
-        edit.setText(current_val)
+        if self._map_key_sources.get(provider_name) == "default":
+            edit.setPlaceholderText("Using bundled default key")
+        else:
+            edit.setText(current_val)
         vbox.addWidget(edit)
 
         btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
@@ -1989,6 +2066,9 @@ class MainWindow(QMainWindow):
 
         def on_ok():
             new_key = edit.text().strip()
+            if self._map_key_sources.get(provider_name) == "default" and not new_key:
+                dlg.accept()
+                return
             self._save_map_key_to_settings(provider_name, new_key)
             dlg.accept()
 
@@ -2063,6 +2143,9 @@ class MainWindow(QMainWindow):
         js_bool = "true" if self._directions_enabled else "false"
         js_code = f"setDirectionsEnabled({js_bool});"
         self.map_widget.view.page().runJavaScript(js_code)
+        # Re-apply "Sync all with video" to JS after each map page load,
+        # so map-side icon/state stays consistent with the action state.
+        self._on_sync_point_video_time_toggled(self.action_new_pts_video_time.isChecked())
 
     def _apply_map_sizes_from_settings(self):
         """
@@ -2070,7 +2153,7 @@ class MainWindow(QMainWindow):
         und setzt fallback=4 für black/red/blue, fallback=6 für yellow.
         Anschließend wird colorSizeMap[...] in JavaScript aktualisiert.
         """
-        s = QSettings("KVRouite", "KVRouite")
+        s = QSettings("VGSync", "VGSync")
 
         defaults = {
             "black": 4,
@@ -2094,7 +2177,7 @@ class MainWindow(QMainWindow):
         Fragt neuen Wert ab und speichert in QSettings => "mapSize/black" etc.
         Übergibt dann an JS => updateAllPointsByColor('black', new_val).
         """
-        s = QSettings("KVRouite", "KVRouite")
+        s = QSettings("VGSync", "VGSync")
 
         default_size = 6 if color_str == "yellow" else 4
         current_val = s.value(f"mapSize/{color_str}", default_size, type=int)
@@ -2184,7 +2267,7 @@ class MainWindow(QMainWindow):
 
         # 4) Optional: in QSettings speichern
        
-        s = QSettings("KVRouite", "KVRouite")
+        s = QSettings("VGSync", "VGSync")
         s.setValue("chart/speedCap", new_val)
     
         
@@ -2192,7 +2275,7 @@ class MainWindow(QMainWindow):
         
         
 
-        s = QSettings("KVRouite", "KVRouite")
+        s = QSettings("VGSync", "VGSync")
         path_stored = s.value("paths/ffmpeg", "", type=str)
         if path_stored and os.path.isdir(path_stored):
             msg = f"Currently stored FFmpeg path:\n{path_stored}"
@@ -2225,7 +2308,7 @@ class MainWindow(QMainWindow):
             return
     
         # store in QSettings
-        s = QSettings("KVRouite", "KVRouite")
+        s = QSettings("VGSync", "VGSync")
         s.setValue("paths/ffmpeg", folder)
     
         # optionally add to PATH
@@ -2323,7 +2406,7 @@ class MainWindow(QMainWindow):
 
     def _on_encoder_setup_clicked(self):
         # xfade vor dem Öffnen merken
-        s = QSettings("KVRouite", "KVRouite")
+        s = QSettings("VGSync", "VGSync")
         old_xfade = s.value("encoder/xfade", 2, type=int)
 
         dlg = EncoderSetupDialog(self)
@@ -2365,7 +2448,7 @@ class MainWindow(QMainWindow):
         so that next time it might auto-detect or prompt again.
         """
        
-        s = QSettings("KVRouite", "KVRouite")
+        s = QSettings("VGSync", "VGSync")
         s.remove("paths/ffmpeg")
     
         QMessageBox.information(self, "FFmpeg Path cleared",
@@ -2597,6 +2680,7 @@ class MainWindow(QMainWindow):
         Dadurch wird die Route – je nach gewähltem Startpunkt (B/E) – vorn oder hinten angefügt.
         """
         old_data = copy.deepcopy(self._gpx_data)
+        had_no_points_before_insert = (len(old_data) == 0)
         self._undo_stack.append(lambda: self._restore_gpx_data(old_data))
         print("[UNDO] InsertPoint => alter Zustand gesichert")
 
@@ -2712,8 +2796,6 @@ class MainWindow(QMainWindow):
                     }
                     gpx_data.append(new_pt)
                     insert_pos=0
-                    if self.playlist_counter > 0 :
-                        self.askSwitchCreateMode()
                 else:
                     last_pt = gpx_data[-1]
                     t_last = last_pt.get("time")
@@ -2751,8 +2833,6 @@ class MainWindow(QMainWindow):
                     }
                     gpx_data.append(new_pt)
                     insert_pos=0
-                    if self.playlist_counter > 0 :
-                        self.askSwitchCreateMode()
                 else:
                     base_pt = gpx_data[idx]
                     t_base = base_pt.get("time")
@@ -2784,6 +2864,24 @@ class MainWindow(QMainWindow):
         self.gpx_widget.set_gpx_data(gpx_data) #need to update gpx_widget data before update elevation
         self.gpx_control.update_elevation_from_opentopo([(insert_pos, lat, lon)])
 
+        # If the very first point was inserted manually while a video is loaded,
+        # treat this as establishing GPX<->video sync at current video time.
+        if (
+            had_no_points_before_insert
+            and len(gpx_data) > 0
+            and not self._autoSyncNewPointsWithVideoTime
+            and self.playlist_counter > 0
+        ):
+            try:
+                video_time = self.video_editor.get_current_position_s()
+                final_s = self.get_final_time_for_global(video_time)
+                set_gpx_video_shift(final_s)
+                # Sync baseline is now established; disable "Sync all with video"
+                # so map/video sync controls are no longer highlighted in red.
+                self._on_sync_point_video_time_toggled(False)
+            except Exception:
+                pass
+
         #  => recalc
         recalc_gpx_data(gpx_data)
         self.gpx_widget.set_gpx_data(gpx_data)
@@ -2804,18 +2902,6 @@ class MainWindow(QMainWindow):
 
         # Projekt als geändert markieren (für Autosave)
         self._project_dirty = True
-        
-    def askSwitchCreateMode(self):
-        answer = QMessageBox.question(
-            self,
-            "Switch to Street View tab?",
-            "New point creation is easier in the Street View tab. Their time will be equal to current video position.\n"
-            "Switch to it now?",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.Yes
-        )
-        if answer == QMessageBox.Yes:
-            self._set_map_video_view()
         
     def _restore_gpx_data(self, gpx_snapshot):
         self._gpx_data = copy.deepcopy(gpx_snapshot)
@@ -3260,6 +3346,18 @@ class MainWindow(QMainWindow):
             self._edit_mode_sync_checked = checked
         elif self._current_view_mode == "street_view":
             self._street_view_mode_sync_checked = checked
+
+    def _is_gpx_selection_video_sync_enabled(self) -> bool:
+        action_enabled = (
+            hasattr(self, "action_new_pts_video_time")
+            and self.action_new_pts_video_time.isChecked()
+        )
+        return (
+            bool(action_enabled)
+            and bool(self._autoSyncNewPointsWithVideoTime)
+            and self.playlist_counter > 0
+            and is_gpx_video_shift_set()
+        )
         
    
     
@@ -3280,6 +3378,12 @@ class MainWindow(QMainWindow):
 
     def _update_gpx_overview(self):
         data = self.gpx_widget.gpx_list._gpx_data
+        # "Define GPX/video sync" button should be unavailable while no GPX exists.
+        if hasattr(self, "video_control") and hasattr(self.video_control, "set_sync_button"):
+            self.video_control.set_sync_button.setEnabled(bool(data))
+            if hasattr(self.video_control, "update_set_sync_highlight"):
+                self.video_control.update_set_sync_highlight()
+
         if not data:
             self.gpx_control.update_info_line(
                 video_time_str="00:00:00.000",  # Mit Millisekunden
@@ -3455,7 +3559,7 @@ class MainWindow(QMainWindow):
 
         
         
-    def on_user_selected_index(self, new_index: int):
+    def on_user_selected_index(self, new_index: int, center_map: bool = True):
         """
         Zentrale Methode für Klicks in Map oder GPX-Liste (im Pause-Modus).
         Wir entfernen die 'Loch'-Logik, sodass ein roter Punkt beim Anklicken
@@ -3471,7 +3575,19 @@ class MainWindow(QMainWindow):
         if self.video_editor.is_playing and is_gpx_video_shift_set():
             self.map_widget.show_yellow(new_index,True)
         else:
-            self.map_widget.show_blue(new_index)
+            # List selections navigate to the point. Map selections are already
+            # visible and must keep the user's current center and zoom level.
+            self.map_widget.show_blue(
+                new_index,
+                do_center=center_map
+            )
+            if center_map:
+                # Ensure centering happens even when the JS feature list isn't
+                # ready (fallback: use Python-side GPX coordinates).
+                try:
+                    self.map_widget.center_on_index(new_index, zoom=None)
+                except Exception:
+                    pass
         
 
         # 3) Liste: dieselbe Zeile gelb machen
@@ -3479,6 +3595,8 @@ class MainWindow(QMainWindow):
         self.gpx_widget.gpx_list.select_row_in_pause(new_index)
         self.chart.highlight_gpx_index(new_index)
         self._sync_street_view_to_index(new_index)
+        if self._is_gpx_selection_video_sync_enabled():
+            self.on_map_sync_any()
 
 
     
@@ -3760,15 +3878,6 @@ class MainWindow(QMainWindow):
     
     
     
-    def _on_gpx_list_pause_clicked(self, row_idx: int):
-        if not self.video_editor.is_playing:
-            # Statt select_point_in_pause => show_blue
-            #self.map_widget.show_blue(row_idx)
-            self.map_widget.show_blue(row_idx, do_center=True)
-            self.chart.highlight_gpx_index(row_idx)
-            if self._autoSyncNewPointsWithVideoTime and self.playlist_counter > 0:
-                self.on_map_sync_any()
-
     def _on_map_pause_clicked(self, index: int):
         """
         Wird aufgerufen, wenn im Pause-Modus in der Karte
@@ -3812,10 +3921,11 @@ class MainWindow(QMainWindow):
         # Text mit Logo am Ende
         message_text = f"""
         <div>
-            <h3>KVRouite - Video and GPX Sync Tool</h3>
+            <h3>VGSync - Video and GPX Sync Tool</h3>
             Version: {APP_VERSION}<br><br>
             
             Copyright (C) 2025 Bernd Eller<br>
+            Copyright (C) 2026 Kinomap<br>
             This program is free software: you can redistribute it and/or modify 
             it under the terms of the GNU General Public License as published by 
             the Free Software Foundation, either version 3 of the License, or 
@@ -3943,20 +4053,16 @@ class MainWindow(QMainWindow):
         # 1) Dialog schließen
         self._video_area_floating_dialog.close()
         self._video_area_floating_dialog = None
-    
-        # 2) Platzhalter entfernen
+
+        # 2) Platzhalter entfernen und Widget wieder im Splitter einhängen
         if self._video_placeholder is not None:
-            idx = self.left_v_layout.indexOf(self._video_placeholder)
-            if idx >= 0:
-                self.left_v_layout.removeWidget(self._video_placeholder)
-            self._video_placeholder.deleteLater()
-            self._video_placeholder = None
+            if reattach_widget_to_splitter(self.left_splitter, self.video_area_widget, self._video_placeholder):
+                self._video_placeholder.deleteLater()
+                self._video_placeholder = None
 
-        # 3) Video wieder einfügen (am selben Index)
-        #    Falls du es wieder ganz oben haben willst, kannst du idx=0 nehmen
-        self.left_v_layout.insertWidget(0, self.video_area_widget, 1)
-
-       
+        # 3) Fallback: falls kein Platzhalter vorhanden war, das Widget wieder an das Layout anfügen
+        if self._video_placeholder is None and self.left_splitter.indexOf(self.video_area_widget) < 0:
+            self.left_splitter.addWidget(self.video_area_widget)
 
 
     def _detach_video_area_widget(self):
@@ -3964,26 +4070,13 @@ class MainWindow(QMainWindow):
             # Schon abgekoppelt
             return
 
-        # 1) Platzhalter erstellen (falls du ihn farblich hervorheben willst)
-        #self._video_placeholder = QFrame()
-        #self._video_placeholder.setStyleSheet("background-color: #444;")
-
-        # 2) Index des video_area_widget im left_v_layout suchen
-        idx = self.left_v_layout.indexOf(self.video_area_widget)
-        if idx < 0:
-            # Falls nicht gefunden => wir brechen lieber ab
-            return
-            
-            
-        self.left_v_layout.removeWidget(self.video_area_widget)
         self._video_placeholder = QFrame()
-        self._video_placeholder.setStyleSheet("background-color: #444;")    
+        self._video_placeholder.setStyleSheet("background-color: #444;")
 
-        # 3) An dieser Position den Platzhalter einfügen
-        self.left_v_layout.insertWidget(idx, self._video_placeholder, 1)
-
-        # 4) Das video_area_widget aus dem Layout entfernen
-        #self.left_v_layout.removeWidget(self.video_area_widget)
+        if not detach_widget_from_splitter(self.left_splitter, self.video_area_widget, self._video_placeholder):
+            self._video_placeholder.deleteLater()
+            self._video_placeholder = None
+            return
 
         # 5) In einem neuen Dialog unterbringen
         dlg = DetachDialog(self)
@@ -4030,14 +4123,12 @@ class MainWindow(QMainWindow):
     def _on_detached_plus(self):
         if self.speed_index < len(self.vlc_speeds) - 1:
             self.speed_index += 1
-        self.current_rate = self.vlc_speeds[self.speed_index]
-        self.video_editor.set_playback_rate(self.current_rate)
+        self._set_current_playback_rate(self.vlc_speeds[self.speed_index])
 
     def _on_detached_minus(self):
         if self.speed_index > 0:
             self.speed_index -= 1
-        self.current_rate = self.vlc_speeds[self.speed_index]
-        self.video_editor.set_playback_rate(self.current_rate)    
+        self._set_current_playback_rate(self.vlc_speeds[self.speed_index])    
 
     
    
@@ -4082,6 +4173,10 @@ class MainWindow(QMainWindow):
         if not (self._gpx_data and self.playlist_counter > 0):
             return
 
+        # don't ask if a GPX/video shift is already defined
+        if is_gpx_video_shift_set():
+            return
+
         # if last GPX operation was an append => never ask here
         if getattr(self, "_last_gpx_load_mode", None) == "append":
             return
@@ -4114,6 +4209,12 @@ class MainWindow(QMainWindow):
         else:
             # remember and give the hint
             self._sync_prompt_answer = False
+            # User confirmed GPX/video are not synchronized:
+            # disable "Sync all with video" mode explicitly.
+            if hasattr(self, "action_new_pts_video_time"):
+                if self.action_new_pts_video_time.isChecked():
+                    self.action_new_pts_video_time.setChecked(False)
+                self._on_sync_point_video_time_toggled(False)
             QMessageBox.information(
                 self, "Video & GPX Sync",
                 "In this case it is advised to define the sync point.\n "
@@ -4438,7 +4539,7 @@ class MainWindow(QMainWindow):
             self.map_widget.show_blue(index, do_center=True)
             #self.map_widget.show_blue(index)
             self.chart.highlight_gpx_index(index)
-            if self._autoSyncNewPointsWithVideoTime and self.playlist_counter > 0:
+            if self._is_gpx_selection_video_sync_enabled():
                 self.on_map_sync_any()
         else:
             # Wenn Video gerade läuft => evtl. jump dorthin
@@ -4639,9 +4740,9 @@ class MainWindow(QMainWindow):
 
         else:
             if self._video_at_end:
-                # => Wir waren am Ende => also erst "stoppen"
-                self.on_stop()             # ruft dein Stop-Verhalten auf
-                self._video_at_end = False # Reset dieses Merkers
+                # Keep the player at its current position and clear the end-state.
+                # A manual stop/rewind is handled by the dedicated stop action.
+                self._video_at_end = False
             
             
             # => PLAY
@@ -4731,7 +4832,23 @@ class MainWindow(QMainWindow):
             val = 1.0
         self.step_manager.set_step_multiplier(val)
 
+    def on_playback_rate_changed(self, rate: float):
+        self._set_current_playback_rate(rate)
+
+    def _set_current_playback_rate(self, rate: float):
+        try:
+            rate = float(rate)
+        except (TypeError, ValueError):
+            rate = 1.0
+
+        self.current_rate = rate
+        if rate in self.vlc_speeds:
+            self.speed_index = self.vlc_speeds.index(rate)
+        self.video_editor.set_playback_rate(self.current_rate)
+        self.video_control.set_playback_rate(self.current_rate)
+
     def _on_timeline_marker_moved(self, new_time_s: float):
+        self._video_at_end = False
         self.video_editor._jump_to_global_time(new_time_s)
         
     def _on_timeline_overlay_remove(self, start_s, end_s):
@@ -4762,6 +4879,7 @@ class MainWindow(QMainWindow):
             total_s = self.real_total_duration
     
         # 3) Aufruft der mpv-Funktion => "globaler" Sprung
+        self._video_at_end = False
         self.video_editor.set_time(total_s)
         #
         # Damit ruft Ihr intern mpv._jump_to_global_time(total_s) auf,
@@ -4782,15 +4900,6 @@ class MainWindow(QMainWindow):
         
     ## on_safe_click
     def on_render_clicked(self):
-        # 1) Sicherheitsabfrage
-        msg = QMessageBox(self)
-        msg.setWindowTitle("Are you sure?")
-        msg.setText("We are now creating the final video, changes are no longer possible! Sure?")
-        msg.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
-        r = msg.exec()
-        if r == QMessageBox.No:
-            return
-
         if not self.playlist:
             QMessageBox.warning(self, "Error", "No videos in playlist!")
             return
@@ -4798,15 +4907,22 @@ class MainWindow(QMainWindow):
         # -------------------------------------------------
         # NEUE LOGIK: Wenn Edit-Mode == "encode" => JSON schreiben
         if self._edit_mode == "encode":
+            # Only in encode mode do we need/show Encoder Setup.
+            enc_dlg = EncoderSetupDialog(self)
+            res = enc_dlg.exec()
+            if res != QDialog.Accepted:
+                return
             
             # 1) Daten aus QSettings lesen (Encoder Setup)
-            s = QSettings("KVRouite","KVRouite")
+            s = QSettings("VGSync","VGSync")
             xfade_val   = s.value("encoder/xfade", 2, type=int)
             hw_encode   = s.value("encoder/hw", "none", type=str)
             container   = s.value("encoder/container", "x265", type=str)
             crf_val     = s.value("encoder/crf", 25, type=int)
-            fps_val     = s.value("encoder/fps", 30, type=int)
+            fps_val     = s.value("encoder/fps", 30.0, type=float)
             preset_val  = s.value("encoder/preset", "fast", type=str)
+            rc_mode_val = s.value("encoder/rate_control_mode", "crf", type=str)
+            br_mode_val = s.value("encoder/bitrate_mode", "vbr", type=str)
             width_val   = s.value("encoder/res_w", 1280, type=int)
 
             # 2) Cuts => skip_instructions
@@ -4864,12 +4980,14 @@ class MainWindow(QMainWindow):
                 "crf": crf_val,
                 "fps": fps_val,
                 "width": width_val,
-                "preset": preset_val
+                "preset": preset_val,
+                "rate_control_mode": rc_mode_val,
+                "bitrate_mode": br_mode_val
             }
 
             
             #temp_dir = tempfile.gettempdir()
-            # 6) In unser KVRouite-Temp speichern
+            # 6) In unser VGSync-Temp speichern
             
             temp_dir = MY_GLOBAL_TMP_DIR
             json_path = os.path.join(temp_dir, "vg_encoder_job.json")
@@ -5062,13 +5180,11 @@ class MainWindow(QMainWindow):
         if event.key() == Qt.Key_Plus or event.text() == '+':
             if self.speed_index < len(self.vlc_speeds) - 1:
                 self.speed_index += 1
-                self.current_rate = self.vlc_speeds[self.speed_index]
-                self.video_editor.set_playback_rate(self.current_rate)
+                self._set_current_playback_rate(self.vlc_speeds[self.speed_index])
         elif event.key() == Qt.Key_Minus or event.text() == '-':
             if self.speed_index > 0:
                 self.speed_index -= 1
-                self.current_rate = self.vlc_speeds[self.speed_index]
-                self.video_editor.set_playback_rate(self.current_rate)
+                self._set_current_playback_rate(self.vlc_speeds[self.speed_index])
                 
         elif event.key() == Qt.Key_V:
             self.action_toggle_360.trigger()  # löst deinen Menü-Flow aus und hält den Haken in sync
@@ -5163,18 +5279,25 @@ class MainWindow(QMainWindow):
             #recalc_gpx_data(self._gpx_data) #to refresh list
             self.gpx_widget.gpx_list.set_gpx_data(self._gpx_data)
             self.video_control.activate_controls()
-            #self.enableVideoGpxSync()
-            if hasattr(self, "action_auto_sync_video"):
-                if not self.action_auto_sync_video.isChecked():
-                    self.action_auto_sync_video.setChecked(True)
-                self._on_auto_sync_video_toggled(True)
-                if hasattr(self, "video_control"):
-                    self.video_control._update_autocut_icon()
-
+            # Defining GPX/video sync must not force-enable AutoCutVideo+GPX.
+            # Force-enable only "Sync all with video", and refresh UI state.
             if hasattr(self, "action_new_pts_video_time"):
                 if not self.action_new_pts_video_time.isChecked():
                     self.action_new_pts_video_time.setChecked(True)
                 self._on_sync_point_video_time_toggled(True)
+
+            # Force AutoCutVideo+GPX only when Edit Video is enabled.
+            if (
+                hasattr(self, "action_auto_sync_video")
+                and getattr(self, "_edit_mode", "off") != "off"
+            ):
+                if not self.action_auto_sync_video.isChecked():
+                    self.action_auto_sync_video.setChecked(True)
+                self._on_auto_sync_video_toggled(True)
+
+            if hasattr(self, "video_control"):
+                self.video_control._update_autocut_icon()
+                self.video_control.update_set_sync_highlight()
             
             if(get_gpx_video_shift() < 0): # color negative points in grey
                 route_geojson = self._build_route_geojson_from_gpx(self._gpx_data)
@@ -5252,6 +5375,9 @@ class MainWindow(QMainWindow):
         4) => on_time_hms_set_clicked => Video
         """
         print("[DEBUG] on_map_sync_any() called (map sync)")
+        if not is_gpx_video_shift_set():
+            print("[DEBUG] on_map_sync_any => GPX/video shift undefined => no video sync.")
+            return
 
         # 1) Which point in the map? (blue_idx)
         idx_map = self.map_widget._blue_idx
@@ -6013,8 +6139,8 @@ class MainWindow(QMainWindow):
                 self._gpx_slots[s]["gpx_video_shift"] = None
                 self._gpx_slots[s]["markB"] = None
                 self._gpx_slots[s]["markE"] = None
-                # Werkseinstellung: Slot1 False, Slot2 True
-                self._gpx_slots[s]["sync_enabled"] = (s == 2)
+                # Werkseinstellung ohne GPX: Sync all with video ON
+                self._gpx_slots[s]["sync_enabled"] = True
             self._active_gpx_slot = 1
             self._apply_slot_to_ui()
         except Exception as e:
@@ -6033,9 +6159,9 @@ class MainWindow(QMainWindow):
                     pass
 
             if hasattr(self, "action_new_pts_video_time"):
-                self.action_new_pts_video_time.setChecked(False)
+                self.action_new_pts_video_time.setChecked(True)
                 try:
-                    self._on_sync_point_video_time_toggled(False)
+                    self._on_sync_point_video_time_toggled(True)
                 except Exception:
                     pass
             
@@ -6309,19 +6435,14 @@ class MainWindow(QMainWindow):
     def _detach_map_widget(self):
         if self._map_floating_dialog is not None:
             return
-    
-        # Index des map_widget im Layout finden
-        idx = self.left_v_layout.indexOf(self.map_widget)
-        if idx < 0:
-            return
-    
-        # Platzhalter
+
         self._map_placeholder = QFrame()
         self._map_placeholder.setStyleSheet("background-color: #444;")
-    
-        # Platzhalter an die alte Stelle des map_widget
-        self.left_v_layout.insertWidget(idx, self._map_placeholder, 1)
-        self.left_v_layout.removeWidget(self.map_widget)
+
+        if not detach_widget_from_splitter(self.left_splitter, self.map_widget, self._map_placeholder):
+            self._map_placeholder.deleteLater()
+            self._map_placeholder = None
+            return
     
         # DetachDialog
         dlg = DetachDialog(self)
@@ -6367,14 +6488,12 @@ class MainWindow(QMainWindow):
         self._map_floating_dialog = None
     
         if self._map_placeholder:
-            idx = self.left_v_layout.indexOf(self._map_placeholder)
-            if idx >= 0:
-                self.left_v_layout.removeWidget(self._map_placeholder)
-            self._map_placeholder.deleteLater()
-            self._map_placeholder = None
-    
-        # Map wieder unten einfügen (z.B. am Ende des Layouts)
-        self.left_v_layout.addWidget(self.map_widget, 1)
+            if reattach_widget_to_splitter(self.left_splitter, self.map_widget, self._map_placeholder):
+                self._map_placeholder.deleteLater()
+                self._map_placeholder = None
+
+        if self._map_placeholder is None and self.left_splitter.indexOf(self.map_widget) < 0:
+            self.left_splitter.addWidget(self.map_widget)
     
     
     def _on_request_reattach_map(self):
@@ -6521,14 +6640,14 @@ class MainWindow(QMainWindow):
             self,
             "Save Project As",
             "",
-            "KVRouite Project (*.KVRouiteproj);;VGSync Project (*.vgsyncproj)"
+            "VGSync Project (*.vgsyncproj)"
         )
         if not filename:
             return
         # Standard-Endung setzen, falls keine vorhanden ist
         lower = filename.lower()
-        if not (lower.endswith(".kvrouiteproj") or lower.endswith(".vgsyncproj")):
-            filename += ".KVRouiteproj"
+        if not lower.endswith(".vgsyncproj"):
+            filename += ".vgsyncproj"
 
         if self._write_project_to_path(filename, show_message=True):
             # Bei Erfolg: aktuellen Projektpfad setzen, Dirty-Flag zurücksetzen
@@ -6607,7 +6726,7 @@ class MainWindow(QMainWindow):
             self,
             "Load Project File",
             "",
-            "Project Files (*.kvrouiteproj *.vgsyncproj);;KVRouite Project (*.kvrouiteproj);;VGSync Project (*.vgsyncproj);;All Files (*.*)"
+            "Project Files (*.vgsyncproj *.kvrouiteproj);;VGSync Project (*.vgsyncproj);;Legacy KVRouite Project (*.kvrouiteproj);;All Files (*.*)"
         )
     
         if not file_path:
@@ -6617,7 +6736,7 @@ class MainWindow(QMainWindow):
         file_ext = file_path.lower()
     
         try:
-            if file_ext.endswith('.kvrouiteproj') or file_ext.endswith('.vgsyncproj'):
+            if file_ext.endswith('.vgsyncproj') or file_ext.endswith('.kvrouiteproj'):
                 # Deine existierende Projekt-Lade-Logik hier aufrufen
                 # (die Logik, die du bereits in load_project hattest)
                 self.process_open_project(file_path)
@@ -6627,7 +6746,7 @@ class MainWindow(QMainWindow):
                     self, 
                     "Unsupported Format", 
                     f"File format not supported: {file_path}\n"
-                    "Please select a .kvrouiteproj or .vgsyncproj file."
+                    "Please select a .vgsyncproj or .kvrouiteproj file."
                 )
                 return
                 
@@ -6644,6 +6763,11 @@ class MainWindow(QMainWindow):
         """
         Ask the user on window close whether to save a modified project.
         """
+        def shutdown_video_editor():
+            editor = getattr(self, "video_editor", None)
+            if editor and hasattr(editor, "shutdown_player"):
+                editor.shutdown_player()
+
         try:
             if getattr(self, "_project_dirty", False):
                 msg = QMessageBox(self)
@@ -6663,9 +6787,11 @@ class MainWindow(QMainWindow):
                     else:
                         self.save_project_as()
                     # Nach erfolgreichem Speichern schließen
+                    shutdown_video_editor()
                     event.accept()
                     return
                 elif clicked is discard_btn:
+                    shutdown_video_editor()
                     event.accept()
                     return
                 else:
@@ -6674,9 +6800,11 @@ class MainWindow(QMainWindow):
                     return
         except Exception:
             # Im Fehlerfall App trotzdem schließen, um nicht hängen zu bleiben
+            shutdown_video_editor()
             event.accept()
 
         # Kein Dirty-Flag oder schon behandelt
+        shutdown_video_editor()
         super().closeEvent(event)
     
     def process_open_project(self, filename: str):
@@ -6756,8 +6884,7 @@ class MainWindow(QMainWindow):
 
             # GPX/Video shift (s)
             set_gpx_video_shift(project_data.get("gpx_video_shift", None))
-            if(is_gpx_video_shift_set()):
-                self.enableVideoGpxSync(True)
+            self.enableVideoGpxSync(is_gpx_video_shift_set())
 
             # 5. Overlays laden
             overlays = project_data.get("overlays", [])
@@ -6859,7 +6986,7 @@ class MainWindow(QMainWindow):
         if path.lower().endswith(".autosave"):
             return
 
-        s = QSettings("KVRouite", "KVRouite")
+        s = QSettings("VGSync", "VGSync")
         file_history = s.value("file_history", [], type=list)
 
         if path in file_history:
@@ -6871,7 +6998,7 @@ class MainWindow(QMainWindow):
         s.setValue("file_history", file_history)
 
     def load_last_gpx_paths(self) -> list[str]:
-        s = QSettings("KVRouite", "KVRouite")
+        s = QSettings("VGSync", "VGSync")
         return s.value("file_history", [], type=list)
 
     def update_recent_files_menu(self):
@@ -6899,7 +7026,7 @@ class MainWindow(QMainWindow):
             self.process_open_fit(path)  # default mode="new" passt hier
         elif(path.endswith(".mp4") or path.endswith(".MP4")):
             self.process_open_mp4([path])
-        elif(path.lower().endswith(".kvrouiteproj") or path.lower().endswith(".vgsyncproj")):
+        elif path.lower().endswith((".vgsyncproj", ".kvrouiteproj")):
             self.process_open_project(path)
         elif(path.lower().endswith(".json")):
             # Geoinfer / proposals JSON erneut importieren
@@ -6989,62 +7116,69 @@ class MainWindow(QMainWindow):
 
         # --- 6) finale Videolänge (Exportlänge) holen ---
         # Bevorzugt deine interne Berechnung (wie in der Infozeile). Fallback: Summe video_durations - Cuts.
-        try:
-            final_duration_s = float(self._calculate_cut_total_duration())
-        except Exception:
-            # Fallback robust
-            vd = getattr(self, "video_durations", None)
-            if isinstance(vd, (list, tuple)):
-                total_len = float(sum(vd))
-            elif isinstance(vd, dict):
-                total_len = float(sum(vd.values()))
-            elif vd is not None:
-                total_len = float(vd)
-            else:
-                total_len = float(getattr(self, "real_total_duration", 0.0))
+        has_video_duration = is_gpx_video_shift_set() and bool(getattr(self, "video_durations", None))
+        final_duration_s = None
 
-            cm = getattr(self, "cut_manager", None)
+        if has_video_duration:
             try:
-                cuts = float(cm.get_total_cuts()) if cm else 0.0
+                final_duration_s = float(self._calculate_cut_total_duration())
             except Exception:
-                cuts = 0.0
+                # Fallback robust
+                vd = getattr(self, "video_durations", None)
+                if isinstance(vd, (list, tuple)):
+                    total_len = float(sum(vd))
+                elif isinstance(vd, dict):
+                    total_len = float(sum(vd.values()))
+                elif vd is not None:
+                    total_len = float(vd)
+                else:
+                    total_len = float(getattr(self, "real_total_duration", 0.0))
 
-            final_duration_s = max(0.0, total_len - cuts)
+                cm = getattr(self, "cut_manager", None)
+                try:
+                    cuts = float(cm.get_total_cuts()) if cm else 0.0
+                except Exception:
+                    cuts = 0.0
+
+                final_duration_s = max(0.0, total_len - cuts)
 
         # --- 7) ENDE millisekundengenau auf final_duration_s klemmen ---
-        last_valid_index = -1
-        for i, pt in enumerate(truncated):
-            rel_s = (pt["time"] - first_gpx_video_time).total_seconds()
-            if rel_s <= final_duration_s:
-                last_valid_index = i
-            else:
-                break
+        if final_duration_s is None:
+            final_truncated = truncated
+        else:
+            last_valid_index = -1
+            for i, pt in enumerate(truncated):
+                rel_s = (pt["time"] - first_gpx_video_time).total_seconds()
+                if rel_s <= final_duration_s:
+                    last_valid_index = i
+                else:
+                    break
 
-        if last_valid_index < 0:
-            QMessageBox.warning(self, "Truncation", "After shortening to the video length, no meaningful GPX remains!")
-            return
+            if last_valid_index < 0:
+                QMessageBox.warning(self, "Truncation", "After shortening to the video length, no meaningful GPX remains!")
+                return
 
-        final_truncated = truncated[:last_valid_index + 1]
+            final_truncated = truncated[:last_valid_index + 1]
 
-        # Interpolation des letzten Punkts, wenn Exportende zwischen zwei Punkten liegt
-        if last_valid_index < len(truncated) - 1:
-            A = final_truncated[-1]
-            B = truncated[last_valid_index + 1]
-            tA = (A["time"] - first_gpx_video_time).total_seconds()
-            tB = (B["time"] - first_gpx_video_time).total_seconds()
+            # Interpolation des letzten Punkts, wenn Exportende zwischen zwei Punkten liegt
+            if last_valid_index < len(truncated) - 1:
+                A = final_truncated[-1]
+                B = truncated[last_valid_index + 1]
+                tA = (A["time"] - first_gpx_video_time).total_seconds()
+                tB = (B["time"] - first_gpx_video_time).total_seconds()
 
-            if tB > final_duration_s and (tB - tA) > 0.0:
-                f = (final_duration_s - tA) / (tB - tA)
-                adjusted_pt = {
-                    "lat": A["lat"] + f * (B["lat"] - A["lat"]),
-                    "lon": A["lon"] + f * (B["lon"] - A["lon"]),
-                    "ele": A.get("ele", 0.0) + f * (B.get("ele", 0.0) - A.get("ele", 0.0)),
-                    "time": first_gpx_video_time + timedelta(seconds=final_duration_s),
-                    "delta_m": 0.0,
-                    "speed_kmh": 0.0,
-                    "gradient": 0.0,
-                }
-                final_truncated[-1] = adjusted_pt
+                if tB > final_duration_s and (tB - tA) > 0.0:
+                    f = (final_duration_s - tA) / (tB - tA)
+                    adjusted_pt = {
+                        "lat": A["lat"] + f * (B["lat"] - A["lat"]),
+                        "lon": A["lon"] + f * (B["lon"] - A["lon"]),
+                        "ele": A.get("ele", 0.0) + f * (B.get("ele", 0.0) - A.get("ele", 0.0)),
+                        "time": first_gpx_video_time + timedelta(seconds=final_duration_s),
+                        "delta_m": 0.0,
+                        "speed_kmh": 0.0,
+                        "gradient": 0.0,
+                    }
+                    final_truncated[-1] = adjusted_pt
 
         if len(final_truncated) < 2:
             QMessageBox.warning(self, "Truncation", "After shortening to the video length, no meaningful GPX remains!")
@@ -7096,7 +7230,7 @@ class MainWindow(QMainWindow):
         from PySide6.QtCore import QSettings
         import config
 
-        s = QSettings("KVRouite", "KVRouite")
+        s = QSettings("VGSync", "VGSync")
         path_stored = s.value("tempSegmentsDir", "", str)
         if path_stored and os.path.isdir(path_stored):
             msg = f"Currently stored Temp Directory:\n{path_stored}"
@@ -7115,7 +7249,7 @@ class MainWindow(QMainWindow):
         if not folder:
             return
     
-        s = QSettings("KVRouite", "KVRouite")
+        s = QSettings("VGSync", "VGSync")
         s.setValue("tempSegmentsDir", folder)
         s.sync()
     
@@ -7133,7 +7267,7 @@ class MainWindow(QMainWindow):
         """
         from PySide6.QtCore import QSettings
     
-        s = QSettings("KVRouite", "KVRouite")
+        s = QSettings("VGSync", "VGSync")
         s.remove("tempSegmentsDir")
         s.sync()
 
@@ -7262,12 +7396,7 @@ class MainWindow(QMainWindow):
         # Dateiendung bestimmen
         file_ext = file_path.lower()
 
-        # JSON → direkt an den Geoinfer/Proposals-Importer delegieren
-        if file_ext.endswith(".json"):
-            self.import_proposals_json(file_path)
-            return
-
-        # GPX/FIT → wie bisher: ggf. nach New/Append fragen
+        # GPX/FIT/JSON → ggf. nach New/Append fragen
         if self._gpx_data:
             msg_box = QMessageBox(self)
             msg_box.setWindowTitle("Load Track File")
@@ -7292,7 +7421,9 @@ class MainWindow(QMainWindow):
             mode = "new"
 
         try:
-            if file_ext.endswith(".gpx"):
+            if file_ext.endswith(".json"):
+                self.import_proposals_json(file_path, mode=mode)
+            elif file_ext.endswith(".gpx"):
                 self.process_open_gpx(file_path, mode)
             elif file_ext.endswith(".fit"):
                 self.process_open_fit(file_path, mode)
@@ -7625,12 +7756,13 @@ class MainWindow(QMainWindow):
     # ---------------------------------------------------------------------
     # JSON import of coordinate proposals
     # ---------------------------------------------------------------------
-    def import_proposals_json(self, file_path=None):
+    def import_proposals_json(self, file_path=None, mode=None):
         """Loads the JSON array produced by the proposal tool, converts each entry
-        into a GPX point and appends them to the current track (or starts a new
-        track if none exist).
+        into GPX points and imports them as a new track or appends them.
 
         If ``file_path`` is None, a file dialog is shown to select the JSON file.
+        If ``mode`` is None, defaults to ``append`` when a track is loaded,
+        otherwise ``new``.
         """
         from PySide6.QtWidgets import QFileDialog
 
@@ -8126,14 +8258,58 @@ class MainWindow(QMainWindow):
                 else:
                     print()
 
-        if getattr(self, "_gpx_data", None):
-            # append
+        if mode not in ("new", "append"):
+            if getattr(self, "_gpx_data", None):
+                msg_box = QMessageBox(self)
+                msg_box.setWindowTitle("Import Proposals")
+                msg_box.setText(
+                    "A track is already loaded.\n"
+                    "Do you want to start a new track or append the imported JSON?"
+                )
+                new_btn = msg_box.addButton("New", QMessageBox.AcceptRole)
+                append_btn = msg_box.addButton("Append", QMessageBox.YesRole)
+                cancel_btn = msg_box.addButton("Cancel", QMessageBox.RejectRole)
+
+                msg_box.exec()
+                clicked = msg_box.clickedButton()
+                if clicked == cancel_btn:
+                    return
+                elif clicked == new_btn:
+                    mode = "new"
+                    self._sync_prompt_answer = None
+                else:
+                    mode = "append"
+            else:
+                mode = "new"
+
+        if mode == "append" and getattr(self, "_gpx_data", None):
             self._gpx_data.extend(pts)
         else:
             self._gpx_data = pts
 
         # keep the track sorted by time
-        self._gpx_data.sort(key=lambda p: p.get("time", _dt.datetime.min))
+        # Normalize mixed naive/aware timestamps to UTC-aware datetimes
+        # so Python can compare them safely during sorting.
+        def _proposal_time_sort_key(point):
+            t = point.get("time")
+            if isinstance(t, _dt.datetime):
+                if t.tzinfo is None:
+                    return t.replace(tzinfo=_dt.timezone.utc)
+                return t.astimezone(_dt.timezone.utc)
+            return _dt.datetime.min.replace(tzinfo=_dt.timezone.utc)
+
+        self._gpx_data.sort(key=_proposal_time_sort_key)
+
+        # Ensure downstream code only sees UTC-aware datetimes.
+        # recalc_gpx_data() subtracts consecutive times and will fail on mixed
+        # naive/aware values.
+        for p in self._gpx_data:
+            t = p.get("time")
+            if isinstance(t, _dt.datetime):
+                if t.tzinfo is None:
+                    p["time"] = t.replace(tzinfo=_dt.timezone.utc)
+                else:
+                    p["time"] = t.astimezone(_dt.timezone.utc)
 
         # strip our temporary confidence field (not needed downstream)
         for p in self._gpx_data:
@@ -8565,7 +8741,7 @@ class MainWindow(QMainWindow):
         """
         Lädt die Player-Einstellungen aus QSettings.
         """
-        s = QSettings("KVRouite", "KVRouite")
+        s = QSettings("VGSync", "VGSync")
         
         # Standardwerte: True (beide Optionen aktiv)
         #show_endcut = s.value("player/show_endcut", True, type=bool)
@@ -8581,7 +8757,7 @@ class MainWindow(QMainWindow):
         """
         Speichert die Player-Einstellungen in QSettings.
         """
-        s = QSettings("KVRouite", "KVRouite")
+        s = QSettings("VGSync", "VGSync")
         
         
         s.setValue("player/show_endcut_warning", self.action_show_endcut_warning.isChecked())
@@ -8601,9 +8777,9 @@ class MainWindow(QMainWindow):
 
     def _on_open_tutorials(self):
         """
-        Öffnet den KVRouite YouTube-Kanal im Standard-Browser nach Bestätigung durch den Benutzer.
+        Öffnet den VGSync YouTube-Kanal im Standard-Browser nach Bestätigung durch den Benutzer.
         """
-        youtube_url = "https://www.youtube.com/@KVRouite"
+        youtube_url = "https://www.youtube.com/@VGSync"
         
         # Überprüfe, ob die URL gültig ist
         url = QUrl(youtube_url)
@@ -8619,7 +8795,7 @@ class MainWindow(QMainWindow):
         reply = QMessageBox.question(
             self,
             "Open YouTube Tutorials",
-            "Do you want to open the KVRouite YouTube channel ?\n\n"
+            "Do you want to open the VGSync YouTube channel ?\n\n"
             "This will open in your default web browser.",
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.No  # Standard-Button: No
@@ -8973,7 +9149,7 @@ class MainWindow(QMainWindow):
         
 
         # 1) Aktuelles xfade aus dem Setup
-        s = QSettings("KVRouite", "KVRouite")
+        s = QSettings("VGSync", "VGSync")
         try:
             xfade = float(s.value("encoder/xfade", 2, type=int))
         except Exception:
@@ -9042,8 +9218,8 @@ class MainWindow(QMainWindow):
 
     def _kickoff_update_check(self):
         # Repo aus Settings (Default wurde im __init__ gesetzt)
-        s = QSettings("KVRouite","KVRouite")
-        repo = s.value("updates/repo", "ridewithoutstomach/KVRouite", type=str)
+        s = QSettings("VGSync","VGSync")
+        repo = s.value("updates/repo", "ridewithoutstomach/VGSync", type=str)
 
         url = f"https://api.github.com/repos/{repo}/releases?per_page=10"
         req = QNetworkRequest(QUrl(url))
@@ -9051,9 +9227,9 @@ class MainWindow(QMainWindow):
         # GitHub erwartet einen User-Agent
         try:
             from config import APP_VERSION
-            ua = f"KVRouite/{APP_VERSION}"
+            ua = f"VGSync/{APP_VERSION}"
         except Exception:
-            ua = "KVRouite"
+            ua = "VGSync"
         req.setRawHeader(b"User-Agent", ua.encode("utf-8"))
         req.setRawHeader(b"Accept", b"application/vnd.github+json")
 
@@ -9102,7 +9278,7 @@ class MainWindow(QMainWindow):
             # Fallback: /tags
             url = f"https://api.github.com/repos/{repo}/tags?per_page=10"
             req = QNetworkRequest(QUrl(url))
-            req.setRawHeader(b"User-Agent", b"KVRouite")
+            req.setRawHeader(b"User-Agent", b"VGSync")
             r2 = self._update_nam.get(req)
             r2.finished.connect(lambda r=r2, reponame=repo: self._on_tags_reply(r, reponame))
             return

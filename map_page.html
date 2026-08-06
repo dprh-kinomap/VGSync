@@ -1,20 +1,20 @@
 <!--
-  This file is part of KVRouite.
+  This file is part of VGSync.
 
   Copyright (C) 2025 by Bernd Eller
 
-  KVRouite is free software: you can redistribute it and/or modify
+  VGSync is free software: you can redistribute it and/or modify
   it under the terms of the GNU General Public License as published by
   the Free Software Foundation, either version 3 of the License, or
   (at your option) any later version.
 
-  KVRouite is distributed in the hope that it will be useful,
+  VGSync is distributed in the hope that it will be useful,
   but WITHOUT ANY WARRANTY; without even the implied warranty of
   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
   See the GNU General Public License for more details.
 
   You should have received a copy of the GNU General Public License
-  along with KVRouite. If not, see <https://www.gnu.org/licenses/>.
+  along with VGSync. If not, see <https://www.gnu.org/licenses/>.
 -->
 
 <!DOCTYPE html>
@@ -23,7 +23,7 @@
   <meta charset="UTF-8" />
   <title>OpenLayers – Directions + Speed Input + Keep old logic</title>
 
-  <!-- OpenLayers (CDN) -->
+  <!-- OpenLayers (CDN fallback; local ol.js may be empty during development) -->
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@7.3.0/ol.css" />
   <script src="https://cdn.jsdelivr.net/npm/ol@7.3.0/dist/ol.js"></script>
 
@@ -402,11 +402,26 @@
 
   <script>
     var clientId = '';
-    var {Viewer} = mapillary;
+    let Viewer = null;
     let mapillaryLinkFeature = null;
     let mapillaryViewer = null;
     let googleStreetViewPanorama = null;
     let googleStreetViewService = null;
+
+    function ensureMapillaryViewerClass() {
+      if (Viewer) {
+        return true;
+      }
+      if (typeof mapillary !== 'undefined' && mapillary && typeof mapillary.Viewer !== 'undefined') {
+        Viewer = mapillary.Viewer;
+        return true;
+      }
+      if (typeof window.mapillary !== 'undefined' && window.mapillary && typeof window.mapillary.Viewer !== 'undefined') {
+        Viewer = window.mapillary.Viewer;
+        return true;
+      }
+      return false;
+    }
 
     function showNoStreetView(duration = 3000) {
       const alertBox = document.getElementById("nostreetview-alert");
@@ -902,15 +917,28 @@
         source: new ol.source.Vector()
       });
 
+      const defaultInteractions = (
+        ol.interaction.defaults &&
+        (ol.interaction.defaults.defaults || ol.interaction.defaults)
+      );
+
       map = new ol.Map({
         target: "map",
         layers: [osmLayer, satLayer, vectorLayer],
+        interactions: defaultInteractions
+          ? defaultInteractions({doubleClickZoom: false})
+          : undefined,
         view: new ol.View({
           center: ol.proj.fromLonLat([10,50]),
           zoom: 5,
           maxZoom: 30
         })
       });
+
+      map.getViewport().addEventListener("dblclick", function(evt){
+        evt.preventDefault();
+        evt.stopPropagation();
+      }, true);
 
       initModify();
 
@@ -1067,6 +1095,11 @@
 
     function initMapillary()
     {
+      if (!ensureMapillaryViewerClass()) {
+        console.error("Mapillary library is not available. Street view will remain disabled.");
+        return;
+      }
+
       mapillaryViewer = new Viewer({
         accessToken: mapillaryKey,
         container: 'mapillaryContent',
@@ -1908,6 +1941,10 @@
     // Function to initialize Mapillary Viewer
     function navigateStreetView(lat, lon) {
       pyLog("navigateStreetView lat: "+lat+" lon: "+lon);
+      if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
+        console.warn("navigateStreetView called with invalid coords:", lat, lon);
+        return;
+      }
       if (currentStreetViewMode === "google") {
         ensureGoogleMapsApiLoaded()
           .then(() => {
@@ -1936,7 +1973,19 @@
               { location: latLng, radius: 50 },
               (data, status) => {
                 if (status === google.maps.StreetViewStatus.OK && data && data.location && data.location.latLng) {
-                  googleStreetViewPanorama.setPosition(data.location.latLng);
+                  // In some Chromium/WebEngine + Maps JS combinations, setPosition()
+                  // can throw internal minified errors for specific panoramas.
+                  // Fallback to pano-id based navigation to keep Street View usable.
+                  try {
+                    googleStreetViewPanorama.setPosition(data.location.latLng);
+                  } catch (e) {
+                    console.warn("StreetView setPosition failed, fallback to setPano:", e);
+                    if (data.location && data.location.pano) {
+                      googleStreetViewPanorama.setPano(data.location.pano);
+                    } else {
+                      throw e;
+                    }
+                  }
                   googleStreetViewPanorama.setVisible(true);
                   streetCoords = [data.location.latLng.lng(), data.location.latLng.lat()];
                   drawMapillaryCrossMarker(streetCoords[0], streetCoords[1]);

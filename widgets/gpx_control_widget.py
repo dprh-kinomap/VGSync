@@ -1,21 +1,21 @@
 # -*- coding: utf-8 -*-
 #
-# This file is part of KVRouite.
+# This file is part of VGSync.
 #
 # Copyright (C) 2025 by Bernd Eller
 #
-# KVRouite is free software: you can redistribute it and/or modify
+# VGSync is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
 # the Free Software Foundation, either version 3 of the License, or
 # (at your option) any later version.
 #
-# KVRouite is distributed in the hope that it will be useful,
+# VGSync is distributed in the hope that it will be useful,
 # but WITHOUT ANY WARRANTY; without even the implied warranty of
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
 # See the GNU General Public License for more details.
 #
 # You should have received a copy of the GNU General Public License
-# along with KVRouite. If not, see <https://www.gnu.org/licenses/>.
+# along with VGSync. If not, see <https://www.gnu.org/licenses/>.
 #
 
 # gpx_control_widget.py 
@@ -263,7 +263,7 @@ class GPXControlWidget(QWidget):
             # 1) PyInstaller-Bundle
             if hasattr(sys, "_MEIPASS"):
                 candidates.append(Path(sys._MEIPASS) / "icon" / "target.png")
-            # 2) Laufzeit-/EXE-Ordner (auch bei "python KVRouite.py")
+            # 2) Laufzeit-/EXE-Ordner (auch bei "python VGSync.py")
             candidates.append(Path(os.path.abspath(os.path.dirname(sys.argv[0]))) / "icon" / "target.png")
             # 3) Repo-Layout relativ zu dieser Datei
             here = Path(__file__).resolve()
@@ -1824,6 +1824,14 @@ class GPXControlWidget(QWidget):
             for i in range(cur_start, cur_end + 1):
                 gpx_data[i]["ele"] = float(gpx_data[i].get("ele", 0.0)) + delta
 
+        # --- Normalize elevation: if any values are negative, shift all values up so minimum is 0 ---
+        all_elevations = [float(pt.get("ele", 0.0)) for pt in gpx_data]
+        min_elevation = min(all_elevations)
+        if min_elevation < 0:
+            offset = -min_elevation  # shift up by the absolute value of the minimum
+            for pt in gpx_data:
+                pt["ele"] = float(pt.get("ele", 0.0)) + offset
+
     # ===========  NEU am Ende von mainwindow.py ============    
     
     
@@ -2656,7 +2664,7 @@ class GPXControlWidget(QWidget):
             # => Directions=True => zeige Profil-Auswahl (QDialog)
             #    Dann rufe _close_gaps_mapbox(..., profile)
             #    Du kannst standard=cycling, optional=driving/walking
-            prof = self._ask_profile_mode()
+            prof = self._ask_profile_mode(getattr(mw.map_widget, "_curr_mapbox_profile", None))
             if not prof:
                 # Abbruch
                 return
@@ -2664,7 +2672,7 @@ class GPXControlWidget(QWidget):
             # Rufe neue Methode
             self._close_gaps_mapbox(b_idx, e_idx, dt, prof)
 
-    def _ask_profile_mode(self) -> str:
+    def _ask_profile_mode(self, default_profile: str = None) -> str:
         """
         Zeigt einen kleinen Dialog mit RadioButtons:
         Bike (cycling), Car (driving), Foot (walking).
@@ -2678,10 +2686,15 @@ class GPXControlWidget(QWidget):
         vbox.addWidget(lbl)
     
         group = QButtonGroup(dlg)
-        rb_bike = QRadioButton("Bike (Default)")
+        rb_bike = QRadioButton("Bike")
         rb_car  = QRadioButton("Car")
         rb_walk = QRadioButton("Foot")
-        rb_bike.setChecked(True)
+        if default_profile == "driving":
+            rb_car.setChecked(True)
+        elif default_profile == "walking":
+            rb_walk.setChecked(True)
+        else:
+            rb_bike.setChecked(True)
         group.addButton(rb_bike)
         group.addButton(rb_car)
         group.addButton(rb_walk)
