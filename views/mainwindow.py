@@ -1710,12 +1710,11 @@ class MainWindow(QMainWindow):
     def _set_map_video_view(self):
         # Keep map fixed on the left. Show dedicated street-view panel on the right.
         self.right_top_stack.setCurrentIndex(1)
+        self._current_view_mode = "street_view"
+        self._sync_right_top_view_tab()
         row_idx = self.gpx_widget.gpx_list.table.currentRow()
         self._sync_street_view_to_index(row_idx)
         self.right_v_layout.update()
-        
-        self._current_view_mode = "street_view"
-        self._sync_right_top_view_tab()
 
     def _on_right_top_view_tab_changed(self, tab_index: int):
         if tab_index == 0:

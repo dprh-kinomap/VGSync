@@ -496,6 +496,7 @@
         if (mapillaryViewer) {
           mapillaryViewer.resize();
         }
+        resizeGoogleStreetView();
         if (selectedCoord) {
           navigateStreetView(selectedCoord[1], selectedCoord[0]);
         }
@@ -505,6 +506,20 @@
       }
 
       if (map) map.updateSize();
+    }
+
+    function resizeGoogleStreetView() {
+      if (!googleStreetViewPanorama || !window.google || !google.maps || !google.maps.event) {
+        return;
+      }
+      setTimeout(() => {
+        try {
+          google.maps.event.trigger(googleStreetViewPanorama, "resize");
+          googleStreetViewPanorama.setVisible(true);
+        } catch (e) {
+          console.warn("Google Street View resize failed:", e);
+        }
+      }, 60);
     }
 
     function setStreetViewDockMode(enabled) {
@@ -528,6 +543,9 @@
       if (map) map.updateSize();
       if (mapillaryViewer && enabled) {
         setTimeout(() => mapillaryViewer.resize(), 60);
+      }
+      if (enabled) {
+        resizeGoogleStreetView();
       }
     }
 
@@ -1938,6 +1956,19 @@
         });
     }
 
+    function updateGoogleStreetPositionFromPanorama() {
+      if (!googleStreetViewPanorama) return;
+      const pos = googleStreetViewPanorama.getPosition();
+      if (!pos) return;
+      const latNow = pos.lat();
+      const lonNow = pos.lng();
+      if (!Number.isFinite(latNow) || !Number.isFinite(lonNow)) return;
+      streetCoords = [lonNow, latNow];
+      drawMapillaryCrossMarker(lonNow, latNow);
+      map.getView().animate({center: ol.proj.fromLonLat(streetCoords), duration: 600});
+      notifyStreetPosition(latNow, lonNow);
+    }
+
     // Function to initialize Mapillary Viewer
     function navigateStreetView(lat, lon) {
       pyLog("navigateStreetView lat: "+lat+" lon: "+lon);
@@ -1954,16 +1985,8 @@
                 pov: { heading: 0, pitch: 0 },
                 zoom: 1
               });
-              googleStreetViewPanorama.addListener("position_changed", () => {
-                const pos = googleStreetViewPanorama.getPosition();
-                if (!pos) return;
-                const latNow = pos.lat();
-                const lonNow = pos.lng();
-                streetCoords = [lonNow, latNow];
-                drawMapillaryCrossMarker(lonNow, latNow);
-                map.getView().animate({center: ol.proj.fromLonLat(streetCoords), duration: 600});
-                notifyStreetPosition(latNow, lonNow);
-              });
+              googleStreetViewPanorama.addListener("position_changed", updateGoogleStreetPositionFromPanorama);
+              googleStreetViewPanorama.addListener("pano_changed", updateGoogleStreetPositionFromPanorama);
             }
             if (!googleStreetViewService) {
               googleStreetViewService = new google.maps.StreetViewService();
@@ -1987,6 +2010,7 @@
                     }
                   }
                   googleStreetViewPanorama.setVisible(true);
+                  resizeGoogleStreetView();
                   streetCoords = [data.location.latLng.lng(), data.location.latLng.lat()];
                   drawMapillaryCrossMarker(streetCoords[0], streetCoords[1]);
                   map.getView().animate({center: ol.proj.fromLonLat(streetCoords), duration: 600});
