@@ -992,9 +992,15 @@ class MainWindow(QMainWindow):
         )
         help_menu.addAction(self.action_auto_update_check)
 
-        # Default-Repo fest verdrahten (einmalig setzen, wenn leer)
-        if not s.value("updates/repo", None, type=str):
-            s.setValue("updates/repo", "ridewithoutstomach/VGSync")
+        # Default update repo. Migrate the old upstream value because GitHub now
+        # redirects it to KVRouite, which would report unrelated releases.
+        default_update_repo = "dprh-kinomap/VGSync"
+        configured_update_repo = s.value("updates/repo", None, type=str)
+        if not configured_update_repo or configured_update_repo in {
+            "ridewithoutstomach/VGSync",
+            "ridewithoutstomach/KVRouite",
+        }:
+            s.setValue("updates/repo", default_update_repo)
 
         # Auto-Check einige Sekunden nach Start
         if self.action_auto_update_check.isChecked():
@@ -8907,7 +8913,7 @@ class MainWindow(QMainWindow):
     def _kickoff_update_check(self):
         # Repo aus Settings (Default wurde im __init__ gesetzt)
         s = QSettings("VGSync","VGSync")
-        repo = s.value("updates/repo", "ridewithoutstomach/VGSync", type=str)
+        repo = s.value("updates/repo", "dprh-kinomap/VGSync", type=str)
 
         url = f"https://api.github.com/repos/{repo}/releases?per_page=10"
         req = QNetworkRequest(QUrl(url))
