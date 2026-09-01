@@ -4,6 +4,11 @@ VGSync – End-User Agreement & Disclaimer
 Copyright (C) 2025 Bernd Eller
 Copyright (C) 2026 Kinomap
 
+This program is a modified version of KVRouite (formerly VGSync) by Bernd Eller,
+https://github.com/ridewithoutstomach/KVRouite, licensed under the GNU General Public License
+as published by the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version. Forked on 6 April 2025; modifications © 2026 Kinomap.
+
 This program is free software: you can redistribute it and/or modify it under
 the terms of the GNU General Public License as published by the Free Software
 Foundation, either version 3 of the License, or (at your option) any later version.
@@ -40,5 +45,6 @@ This application includes and distributes open-source libraries:
 - mpv (GPL build)    — https://mpv.io
 
 Full license texts for these libraries are located in the `_internal/ffmpeg`
-and `_internal/mpv` folders. Corresponding source code for FFmpeg and mpv, as
-used in this distribution, is available at: http://www.KVRouite.com
+and `_internal/mpv` folders. Corresponding source code for FFmpeg and mpv is
+available from their upstream project pages: https://ffmpeg.org and https://mpv.io.
+The project source is available at: https://github.com/dprh-kinomap/VGSync

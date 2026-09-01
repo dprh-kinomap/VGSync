@@ -73,8 +73,8 @@ class DisclaimerDialog(QDialog):
             "</ul>"
             "Full license texts for these libraries are located in the <br>"
             "<code>_internal/ffmpeg</code> and <code>_internal/mpv</code> folders.<br>"
-            "Corresponding source code for FFmpeg and mpv, as used in this distribution, is available at<br> "
-            "<a href='http://www.KVRouite.com'>http://www.KVRouite.com</a>.<br><br>"
+            "Corresponding source code for FFmpeg and mpv is available from the upstream project pages:<br> "
+            "<a href='https://ffmpeg.org'>ffmpeg.org</a> and <a href='https://mpv.io'>mpv.io</a>.<br><br>"
             
             
             "</p>"

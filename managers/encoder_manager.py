@@ -1348,7 +1348,7 @@ if __name__ == "__main__":
 #-----------------------------------------------------------------
 
 class EncoderDialog(QDialog):
-    _counter_url = "http://www.KVRouite.com/project/counter.php"
+    _counter_url = ""
     """
     Dieses QFenster zeigt den gesamten ffmpeg-Output,
     den dein xfade6_2.py generiert (also Keyframe-Indexing, etc.),
@@ -1371,9 +1371,10 @@ class EncoderDialog(QDialog):
         self.resize(800, 600)
         
     def _increment_counter_on_server(self, mode: str):
-        """
-        Erhöht den Zähler auf dem Server (mode='video' oder 'gpx')
-        """
+        """Disabled: this project no longer reports anonymous usage counters to external servers."""
+        if not self._counter_url:
+            return None
+
         if mode not in ("video", "gpx"):
             print("[WARN] Ungültiger mode für Counter:", mode)
             return None

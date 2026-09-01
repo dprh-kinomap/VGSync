@@ -494,7 +494,8 @@ class MainWindow(QMainWindow):
         
         super().__init__()
         
-        self._counter_url = "http://www.KVRouite.com/project/counter.php"
+        # Contribution counter is intentionally disabled in this branch.
+        self._counter_url = ""
         self._undo_stack = []
         
         self._maptiler_key = ""
@@ -601,9 +602,9 @@ class MainWindow(QMainWindow):
         self.update_recent_files_menu()
         file_menu.addSeparator()
 
-        # Single import entry for GPX/FIT/Geoinfer JSON
-        load_track_action = QAction("Import GPX/FIT/Geoinfer JSON...", self)
-        load_track_action.setStatusTip("Import GPX, FIT, or Geoinfer proposals JSON file")
+        # Single import entry for GPX/FIT tracks
+        load_track_action = QAction("Import GPX/FIT...", self)
+        load_track_action.setStatusTip("Import GPX or FIT track file")
         load_track_action.triggered.connect(self.load_track_file)
         file_menu.addAction(load_track_action)
 
@@ -1884,6 +1885,9 @@ class MainWindow(QMainWindow):
             print("[WARN] _increment_counter_on_server: Ungültiger mode=", mode)
             return None
 
+        if not self._counter_url:
+            return None
+
         action = "increment_video" if mode == "video" else "increment_gpx"
         url = f"{self._counter_url}?action={action}"
         print("[DEBUG] increment request =>", url)
@@ -1904,6 +1908,9 @@ class MainWindow(QMainWindow):
         Gibt bei Erfolg ein Dict { 'video': number, 'gpx': number } zurück,
         sonst None.
         """
+        if not self._counter_url:
+            return None
+
         url = self._counter_url  # ohne ?action
         #print("[DEBUG] fetch counters =>", url)
         
@@ -3945,7 +3952,7 @@ class MainWindow(QMainWindow):
             "<code>_internal/ffmpeg</code> and <code>_internal/mpv</code> folders.<br>"            
             The complete source code for these libraries as used in this software 
             is available at 
-            <a href='http://KVRouite.com'>http://KVRouite.com</a>.<br><br>
+            <a href='https://github.com/dprh-kinomap/VGSync'>https://github.com/dprh-kinomap/VGSync</a>.<br><br>
             
             <b>Patent Encumbrance Notice:</b><br>
             Some codecs (such as x265) may be patent-encumbered in certain jurisdictions. 

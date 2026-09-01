@@ -1,8 +1,8 @@
 ; ===== VGSync — Installer (Info-Seite & Cleaning-Hinweis) =====
 
 #define MyAppName        "VGSync"
-#define MyAppPublisher   "ridewithoutstomach"
-#define MyAppURL         "https://github.com/ridewithoutstomach/VGSync"
+#define MyAppPublisher   "Kinomap"
+#define MyAppURL         "https://github.com/dprh-kinomap/VGSync"
 
 #ifndef MyAppVersion
   #define MyAppVersion "0.0.0"

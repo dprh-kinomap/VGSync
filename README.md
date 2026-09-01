@@ -1,9 +1,9 @@
 VGSync
 ======
 
-> **Note:** This project was **formerly known as [VGSync](https://github.com/ridewithoutstomach/VGSync)**.  
-> The name was changed to better reflect the tool’s purpose — it’s much more than a sync utility:  
-> a complete *Video and GPX Route Creation Suite*.
+> This program is a modified version of KVRouite (formerly VGSync) by Bernd Eller,  
+> https://github.com/ridewithoutstomach/KVRouite, licensed under the GNU General Public License v3.0 or later.  
+> Forked on 6 April 2025; modifications © 2026 Kinomap.
 
 ![Kinomap Logo](./doc/Kinomap_Logo.png)
 
@@ -48,12 +48,12 @@ sudo apt install ffmpeg libmpv-dev python3-venv
 
 You can **either**:
 
-- Download the latest ZIP from [GitHub Releases](https://github.com/ridewithoutstomach/VGSync/releases) and extract it  
+- Download the latest ZIP from [GitHub Releases](https://github.com/dprh-kinomap/VGSync/releases) and extract it  
 **or**
 - Clone the repository:
 
 ```bash
-git clone https://github.com/ridewithoutstomach/VGSync.git
+git clone https://github.com/dprh-kinomap/VGSync.git
 ```
 
 #### Setup and Run
@@ -155,16 +155,14 @@ FFmpeg
 - License: GPLv3
 - Website: https://ffmpeg.org
 - Binaries provided in: "ffmpeg/"
-- Original source code included in: "third-party-src/FFmpeg-7.1-source.zip"
-- Release notes included in the source archive
+- Source code for the upstream FFmpeg project is available from the official project site
 
 mpv
 - Version: 0.40.0
-- License: LGPLv2.1+
+- License: GPLv3 build
 - Website: https://mpv.io
 - Binaries provided in: "mpv/"
-- Original source code included in: "third-party-src/mpv-0.40.0-source.zip"
-- Release notes included in the source archive
+- Source code for the corresponding mpv build is available from the official mpv project
 
 GoPro GPS Extraction
 - Based on: gopro2gpx by Juan M. Casillas (https://github.com/juanmcasillas/gopro2gpx)
@@ -172,8 +170,7 @@ GoPro GPS Extraction
 - License: GNU GPL v3
 
 All third-party components are redistributed in accordance with their respective licenses.
-The complete and unmodified source code is included in the "third-party-src/" directory 
-and will be retained and made available for at least three (3) years in accordance with GPL and LGPL requirements.
+For distributed binary builds, the corresponding upstream source code is made available by the upstream projects themselves and is not bundled in this repository as a separate archive.
 
 
 
@@ -204,11 +201,11 @@ For questions, suggestions, or contributions, please open an issue or pull reque
 
 Project: **VGSync — Kinomap Video Route Suite** (officially supported by Kinomap)
 
+Copyright (C) 2025 Bernd Eller
 Copyright (C) 2026 Kinomap
 
-**Imprint (DE):** https://kvrouite.com/impressum.html
-**Privacy:** https://kvrouite.com/privacy.html
+This program is a modified version of KVRouite (formerly VGSync) by Bernd Eller,
+https://github.com/ridewithoutstomach/KVRouite, licensed under the GNU General Public License v3.0 or later.
+Forked on 6 April 2025; modifications © 2026 Kinomap.
 
-No cookies/trackers are set on the project website beyond what is technically necessary.  
-GitHub may process connection data per their Privacy Statement.  
-For contact, please use GitHub Issues or the email button on the imprint page.
+For questions, suggestions, or contributions, please use GitHub Issues or the project repository discussion channels.
