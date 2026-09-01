@@ -4,7 +4,7 @@ VGSync – End-User Agreement & Disclaimer
 Copyright (C) 2025 Bernd Eller
 Copyright (C) 2026 Kinomap
 
-This program is a modified version of KVRouite (formerly VGSync) by Bernd Eller,
+This program is a modified version of KVRouite by Bernd Eller,
 https://github.com/ridewithoutstomach/KVRouite, licensed under the GNU General Public License
 as published by the Free Software Foundation, either version 3 of the License, or
 (at your option) any later version. Forked on 6 April 2025; modifications © 2026 Kinomap.

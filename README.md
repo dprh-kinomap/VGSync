@@ -1,7 +1,7 @@
 VGSync
 ======
 
-> This program is a modified version of KVRouite (formerly VGSync) by Bernd Eller,  
+> This program is a modified version of KVRouite by Bernd Eller,  
 > https://github.com/ridewithoutstomach/KVRouite, licensed under the GNU General Public License v3.0 or later.  
 > Forked on 6 April 2025; modifications © 2026 Kinomap.
 
@@ -141,7 +141,7 @@ To create your own Windows executable:
 
 The resulting executable will be located at:
 
-    dist/VGSync_3.27/VGSync.exe
+    dist/VGSync_xxx/VGSync.exe
 
 -------------------------------------------------------------------------------
 
@@ -199,12 +199,12 @@ For questions, suggestions, or contributions, please open an issue or pull reque
 
 ## Legal / Contact
 
-Project: **VGSync — Kinomap Video Route Suite** (officially supported by Kinomap)
+Project: **VGSync — Kinomap Video GPX Synchronization** (officially supported by Kinomap)
 
 Copyright (C) 2025 Bernd Eller
 Copyright (C) 2026 Kinomap
 
-This program is a modified version of KVRouite (formerly VGSync) by Bernd Eller,
+This program is a modified version of KVRouite by Bernd Eller,
 https://github.com/ridewithoutstomach/KVRouite, licensed under the GNU General Public License v3.0 or later.
 Forked on 6 April 2025; modifications © 2026 Kinomap.
 

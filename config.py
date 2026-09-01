@@ -47,7 +47,7 @@ def migrate_settings_from_kvrouite() -> None:
 # 1) Versions-Konfiguration & Modus
 ##############################################################################
 
-APP_VERSION = "5.0" 
+APP_VERSION = "5.01" 
 # use 4.30_pre for a pre Version
 
 
