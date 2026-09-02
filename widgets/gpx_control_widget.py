@@ -3719,16 +3719,20 @@ class GPXControlWidget(QWidget):
 
         gpx_data = mw.gpx_widget.gpx_list._gpx_data
         if not gpx_data or len(gpx_data) < 2:
-            return "<difficulty></difficulty>"
+            QMessageBox.warning(self, "No GPX Data", "No GPX data available for export.")
+            return "<difficulty></difficulty>\n<speed></speed>"
 
         start_time = gpx_data[0].get("time")
         if not start_time:
-            return "<difficulty></difficulty>"
+            QMessageBox.warning(self, "No GPX Time", "The GPX data has no valid start time.")
+            return "<difficulty></difficulty>\n<speed></speed>"
 
         def format_time(seconds: float) -> str:
             total_seconds = int(seconds)
             minutes = total_seconds // 60
             secs = total_seconds % 60
+            if minutes == 0 and secs == 0:
+                return "00:00"
             return f"{minutes}:{secs:02d}"
 
         def calc_avg_slope(start_idx, end_idx):
@@ -3743,11 +3747,113 @@ class GPXControlWidget(QWidget):
         def convert_slope(slope):
             return int(round(15 + (slope/15) * 85))
 
-        output = []
+        def convert_speed(speed_kmh):
+            return int(round(float(speed_kmh) / 2.0) * 2)
+
+        def section_value(section):
+            weight_s = section.get("weight_s", section["end_s"] - section["start_s"])
+            if weight_s <= 0:
+                return 0
+            return convert_speed(section["speed_sum"] / weight_s)
+
+        def merge_speed_sections(left, right):
+            return {
+                "start_s": left["start_s"],
+                "end_s": right["end_s"],
+                "speed_sum": left["speed_sum"] + right["speed_sum"],
+                "weight_s": left.get("weight_s", left["end_s"] - left["start_s"])
+                            + right.get("weight_s", right["end_s"] - right["start_s"]),
+            }
+
+        def ignored_speed_peak(section):
+            return {
+                "start_s": section["start_s"],
+                "end_s": section["end_s"],
+                "speed_sum": 0.0,
+                "weight_s": 0.0,
+            }
+
+        def is_short_speed_peak(section, prev_section=None, next_section=None):
+            speed_value = section_value(section)
+            if speed_value < 80:
+                return False
+
+            neighbor_values = [
+                section_value(s)
+                for s in (prev_section, next_section)
+                if s is not None
+            ]
+            if not neighbor_values:
+                return False
+
+            neighbor_speed = max(neighbor_values)
+            return speed_value >= neighbor_speed * 2 and speed_value - neighbor_speed >= 40
+
+        def squash_equal_speed_sections(sections):
+            squashed = []
+            for section in sections:
+                if squashed and section_value(squashed[-1]) == section_value(section):
+                    squashed[-1] = merge_speed_sections(squashed[-1], section)
+                else:
+                    squashed.append(section)
+            return squashed
+
+        def merge_short_speed_sections(sections, max_duration_s=2.0):
+            sections = squash_equal_speed_sections(sections)
+
+            changed = True
+            while changed and len(sections) > 1:
+                changed = False
+                for idx, section in enumerate(sections):
+                    duration = section["end_s"] - section["start_s"]
+                    if duration > max_duration_s:
+                        continue
+
+                    if 0 < idx < len(sections) - 1:
+                        prev_section = sections[idx - 1]
+                        next_section = sections[idx + 1]
+                        if is_short_speed_peak(section, prev_section, next_section):
+                            section = ignored_speed_peak(section)
+
+                        if section_value(prev_section) == section_value(next_section):
+                            merged = merge_speed_sections(
+                                merge_speed_sections(prev_section, section),
+                                next_section
+                            )
+                            sections[idx - 1:idx + 2] = [merged]
+                        else:
+                            prev_duration = prev_section["end_s"] - prev_section["start_s"]
+                            next_duration = next_section["end_s"] - next_section["start_s"]
+                            if prev_duration >= next_duration:
+                                sections[idx - 1:idx + 1] = [
+                                    merge_speed_sections(prev_section, section)
+                                ]
+                            else:
+                                sections[idx:idx + 2] = [
+                                    merge_speed_sections(section, next_section)
+                                ]
+                    elif idx == 0:
+                        if is_short_speed_peak(section, next_section=sections[1]):
+                            section = ignored_speed_peak(section)
+                        sections[0:2] = [merge_speed_sections(section, sections[1])]
+                    else:
+                        if is_short_speed_peak(section, prev_section=sections[idx - 1]):
+                            section = ignored_speed_peak(section)
+                        sections[idx - 1:idx + 1] = [
+                            merge_speed_sections(sections[idx - 1], section)
+                        ]
+
+                    sections = squash_equal_speed_sections(sections)
+                    changed = True
+                    break
+
+            return sections
+
+        difficulty_output = []
         segment_start = 0
         last_slope = calc_avg_slope(segment_start, segment_start+1)
         last_value = convert_slope(last_slope)
-        output.append(f"0:00/{last_value}")
+        difficulty_output.append(f"{format_time(0)}/{last_value}")
 
         i = segment_start + 2
         while i < len(gpx_data):
@@ -3768,7 +3874,7 @@ class GPXControlWidget(QWidget):
                 t = gpx_data[best_index]["time"]
                 rel_sec = (t - start_time).total_seconds()
                 new_val = convert_slope(current_slope)
-                output.append(f"{format_time(rel_sec)}/{new_val}")
+                difficulty_output.append(f"{format_time(rel_sec)}/{new_val}")
                 segment_start = best_index
                 last_slope = current_slope
                 last_value = new_val
@@ -3778,9 +3884,70 @@ class GPXControlWidget(QWidget):
 
         t = gpx_data[-1]["time"]
         rel_sec = (t - start_time).total_seconds()
-        output.append(f"{format_time(rel_sec)}/{convert_slope(last_slope)}")
+        difficulty_output.append(f"{format_time(rel_sec)}/{convert_slope(last_slope)}")
 
-        result = f"<difficulty>{';'.join(output)}</difficulty>"
+        speed_sections = []
+        for idx in range(1, len(gpx_data)):
+            prev_time = gpx_data[idx - 1].get("time")
+            point_time = gpx_data[idx].get("time")
+            if not prev_time or not point_time:
+                continue
+
+            segment_start_s = (prev_time - start_time).total_seconds()
+            segment_end_s = (point_time - start_time).total_seconds()
+            duration_s = segment_end_s - segment_start_s
+            if duration_s <= 0:
+                continue
+
+            section = {
+                "start_s": segment_start_s,
+                "end_s": segment_end_s,
+                "speed_sum": float(gpx_data[idx].get("speed_kmh", 0.0)) * duration_s,
+                "weight_s": duration_s,
+            }
+            if speed_sections and section_value(speed_sections[-1]) == section_value(section):
+                speed_sections[-1] = merge_speed_sections(speed_sections[-1], section)
+            else:
+                speed_sections.append(section)
+
+        speed_sections = merge_short_speed_sections(speed_sections)
+
+        speed_output = []
+        if not speed_sections:
+            speed_output.append(f"{format_time(0)}/0")
+        else:
+            for section in speed_sections:
+                speed_output.append(
+                    f"{format_time(section['start_s'])}/{section_value(section)}"
+                )
+
+        difficulty_xml = f"<difficulty>{';'.join(difficulty_output)}</difficulty>"
+        speed_xml = f"<speed>{';'.join(speed_output)}</speed>"
+        result = f"{difficulty_xml}\n{speed_xml}"
+
+        QApplication.clipboard().setText(result)
+
+        out_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export Difficulty and Speed",
+            "fit_immersion_sections.txt",
+            "Text Files (*.txt);;All Files (*)"
+        )
+        if out_path:
+            try:
+                with open(out_path, "w", encoding="utf-8") as f:
+                    f.write(result)
+                    f.write("\n")
+            except OSError as err:
+                QMessageBox.warning(self, "Export Failed", f"Could not write export file:\n{err}")
+                return result
+
+        QMessageBox.information(
+            self,
+            "Export Ready",
+            "Difficulty and speed sections copied to the clipboard."
+            + (f"\n\nSaved to:\n{out_path}" if out_path else "")
+        )
+
         print(result)
         return result
-
