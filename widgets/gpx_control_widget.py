@@ -82,6 +82,7 @@ class GPXControlWidget(QWidget):
         super().__init__(parent)
         
         self._mainwindow = None
+        self._fit_difficulty_sections = []
         
         
 
@@ -3712,7 +3713,301 @@ class GPXControlWidget(QWidget):
         
     
 
-    def export_fit_immersion(self, threshold: float = 1.0):
+    def _format_fit_section_time(self, seconds: float) -> str:
+        total_seconds = int(seconds)
+        minutes = total_seconds // 60
+        secs = total_seconds % 60
+        if minutes == 0 and secs == 0:
+            return "00:00"
+        return f"{minutes}:{secs:02d}"
+
+    def _build_fit_immersion_difficulty_sections(self, gpx_data, threshold: float = 1.0):
+        if not gpx_data or len(gpx_data) < 2:
+            return []
+
+        start_time = gpx_data[0].get("time")
+        if not start_time:
+            return []
+
+        min_change = max(float(threshold), 15.0)
+        min_duration_s = 10.0
+        smooth_radius = 5
+        flat_slope_threshold = 1.0
+        transient_duration_s = 3.0
+
+        def convert_slope(slope):
+            raw_value = 15 + (slope / 15) * 85
+            return int(round(raw_value))
+
+        def section_class(slope):
+            if slope >= flat_slope_threshold:
+                return "up"
+            if slope <= -flat_slope_threshold:
+                return "down"
+            return "flat"
+
+        def section_value(section):
+            weight_s = section.get("weight_s", section["end_s"] - section["start_s"])
+            if weight_s <= 0:
+                return int(section.get("value", convert_slope(0.0)))
+            return int(round(section["value_sum"] / weight_s))
+
+        def merge_sections(left, right, forced_class=None):
+            weight_left = left.get("weight_s", left["end_s"] - left["start_s"])
+            weight_right = right.get("weight_s", right["end_s"] - right["start_s"])
+            if forced_class is not None:
+                merged_class = forced_class
+            elif left.get("class") == right.get("class"):
+                merged_class = left.get("class")
+            elif weight_left >= weight_right:
+                merged_class = left.get("class", "flat")
+            else:
+                merged_class = right.get("class", "flat")
+            return {
+                "start_s": left["start_s"],
+                "end_s": right["end_s"],
+                "value_sum": left["value_sum"] + right["value_sum"],
+                "weight_s": weight_left + weight_right,
+                "class": merged_class,
+            }
+
+        def squash_sections(sections):
+            squashed = []
+            for section in sections:
+                if (
+                    squashed
+                    and squashed[-1].get("class") == section.get("class")
+                    and abs(section_value(squashed[-1]) - section_value(section)) < min_change
+                ):
+                    squashed[-1] = merge_sections(squashed[-1], section, section.get("class", "flat"))
+                else:
+                    squashed.append(section)
+            return squashed
+
+        intervals = []
+        for idx in range(1, len(gpx_data)):
+            prev_time = gpx_data[idx - 1].get("time")
+            point_time = gpx_data[idx].get("time")
+            if not prev_time or not point_time:
+                continue
+
+            duration_s = (point_time - prev_time).total_seconds()
+            if duration_s <= 0:
+                continue
+
+            dist = float(gpx_data[idx].get("delta_m", 0.0))
+            if dist <= 0.5:
+                slope = 0.0
+            else:
+                prev_ele = float(gpx_data[idx - 1].get("ele", 0.0))
+                point_ele = float(gpx_data[idx].get("ele", 0.0))
+                slope = ((point_ele - prev_ele) / dist) * 100.0
+
+            intervals.append({
+                "start_s": (prev_time - start_time).total_seconds(),
+                "end_s": (point_time - start_time).total_seconds(),
+                "slope": slope,
+                "weight_s": duration_s,
+            })
+
+        sections = []
+        for pos, interval in enumerate(intervals):
+            s = max(0, pos - smooth_radius)
+            e = min(len(intervals) - 1, pos + smooth_radius)
+            smooth_slice = intervals[s:e + 1]
+            smooth_weight = sum(item["weight_s"] for item in smooth_slice)
+            if smooth_weight <= 0:
+                smooth_slope = interval["slope"]
+            else:
+                smooth_slope = sum(item["slope"] * item["weight_s"] for item in smooth_slice) / smooth_weight
+
+            value = convert_slope(smooth_slope)
+            klass = section_class(smooth_slope)
+            section = {
+                "start_s": interval["start_s"],
+                "end_s": interval["end_s"],
+                "value": value,
+                "value_sum": value * interval["weight_s"],
+                "weight_s": interval["weight_s"],
+                "class": klass,
+            }
+
+            if (
+                sections
+                and sections[-1].get("class") == klass
+                and abs(value - section_value(sections[-1])) < min_change
+            ):
+                sections[-1] = merge_sections(sections[-1], section, klass)
+            else:
+                sections.append(section)
+
+        sections = squash_sections(sections)
+        changed = True
+        while changed and len(sections) > 1:
+            changed = False
+            for idx, section in enumerate(sections):
+                duration = section["end_s"] - section["start_s"]
+                if duration > min_duration_s:
+                    continue
+
+                klass = section.get("class", "flat")
+                merged = False
+                if idx > 0 and sections[idx - 1].get("class") == klass:
+                    sections[idx - 1:idx + 1] = [merge_sections(sections[idx - 1], section, klass)]
+                    merged = True
+                elif idx < len(sections) - 1 and sections[idx + 1].get("class") == klass:
+                    sections[idx:idx + 2] = [merge_sections(section, sections[idx + 1], klass)]
+                    merged = True
+                elif 0 < idx < len(sections) - 1 and sections[idx - 1].get("class") == sections[idx + 1].get("class"):
+                    neighbor_class = sections[idx - 1].get("class", "flat")
+                    sections[idx - 1:idx + 2] = [
+                        merge_sections(
+                            merge_sections(sections[idx - 1], section, neighbor_class),
+                            sections[idx + 1],
+                            neighbor_class,
+                        )
+                    ]
+                    merged = True
+                elif duration <= transient_duration_s and klass == "flat" and idx > 0:
+                    prev_class = sections[idx - 1].get("class", "flat")
+                    sections[idx - 1:idx + 1] = [merge_sections(sections[idx - 1], section, prev_class)]
+                    merged = True
+
+                if merged:
+                    sections = squash_sections(sections)
+                    changed = True
+                    break
+
+        normalized = []
+        for section in sections:
+            value = section_value(section)
+            normalized.append({
+                "start_s": float(section["start_s"]),
+                "end_s": float(section["end_s"]),
+                "value": int(value),
+                "class": section.get("class", "flat"),
+                "value_sum": float(value) * max(0.0, float(section["end_s"]) - float(section["start_s"])),
+                "weight_s": max(0.0, float(section["end_s"]) - float(section["start_s"])),
+            })
+
+        return normalized
+
+    def _difficulty_sections_to_output(self, sections, end_s: float | None = None):
+        output = []
+        for section in sections or []:
+            output.append(
+                f"{self._format_fit_section_time(section.get('start_s', 0.0))}/{int(round(float(section.get('value', 15))))}"
+            )
+        if not output:
+            output.append(f"{self._format_fit_section_time(0)}/15")
+        elif end_s is not None:
+            last_start_s = float((sections or [{}])[-1].get("start_s", 0.0))
+            if int(end_s) != int(last_start_s):
+                last_value = int(round(float((sections or [{}])[-1].get("value", 15))))
+                output.append(f"{self._format_fit_section_time(end_s)}/{last_value}")
+        return output
+
+    def _on_chart_difficulty_segments_changed(self, segments):
+        self._fit_difficulty_sections = [dict(section) for section in (segments or [])]
+        mw = self._mainwindow
+        if mw is not None and hasattr(mw, "_update_fit_difficulty_section_actions"):
+            mw._update_fit_difficulty_section_actions()
+        if mw is not None and hasattr(mw, "_project_dirty"):
+            mw._project_dirty = True
+
+    def _normalize_fit_difficulty_sections(self, sections):
+        normalized = []
+        for section in sections or []:
+            try:
+                start_s = float(section.get("start_s", 0.0))
+                end_s = float(section.get("end_s", start_s))
+                value = int(round(float(section.get("value", 15))))
+            except (TypeError, ValueError):
+                continue
+            if end_s <= start_s:
+                continue
+            duration = end_s - start_s
+            normalized.append({
+                "start_s": start_s,
+                "end_s": end_s,
+                "value": value,
+                "class": section.get("class", "flat"),
+                "value_sum": float(value) * duration,
+                "weight_s": duration,
+            })
+        normalized.sort(key=lambda section: section["start_s"])
+        return normalized
+
+    def get_fit_difficulty_sections_for_project(self):
+        return self._normalize_fit_difficulty_sections(self._fit_difficulty_sections)
+
+    def set_fit_difficulty_sections_from_project(self, sections):
+        self._fit_difficulty_sections = self._normalize_fit_difficulty_sections(sections)
+        mw = self._mainwindow
+        if mw is not None and hasattr(mw, "_update_fit_difficulty_section_actions"):
+            mw._update_fit_difficulty_section_actions()
+
+    def generate_fit_immersion_difficulty_sections(self, checked=False):
+        mw = self._mainwindow
+        if not mw:
+            return
+
+        gpx_data = mw.gpx_widget.gpx_list._gpx_data
+        if not gpx_data or len(gpx_data) < 2:
+            QMessageBox.warning(self, "No GPX Data", "No GPX data available.")
+            return
+
+        if self._fit_difficulty_sections:
+            reply = QMessageBox.question(
+                self,
+                "Replace Difficulty Sections",
+                "Difficulty sections already exist for this project.\nGenerate new sections and replace them?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if reply != QMessageBox.Yes:
+                self.open_fit_immersion_difficulty_sections()
+                return
+
+        self._fit_difficulty_sections = self._build_fit_immersion_difficulty_sections(gpx_data)
+        if not self._fit_difficulty_sections:
+            QMessageBox.warning(self, "No Sections", "Could not create difficulty sections.")
+            return
+
+        mw.chart.set_difficulty_segments(self._fit_difficulty_sections)
+        mw.chart.set_difficulty_edit_mode(True)
+        if hasattr(mw, "_update_fit_difficulty_section_actions"):
+            mw._update_fit_difficulty_section_actions()
+        if hasattr(mw, "_project_dirty"):
+            mw._project_dirty = True
+        QMessageBox.information(
+            self,
+            "Difficulty Sections",
+            f"{len(self._fit_difficulty_sections)} difficulty sections created.\n"
+            "You can drag section boundaries on the chart, click values to edit them, "
+            "double-click sections to split them, and use x to delete a section."
+        )
+
+    def open_fit_immersion_difficulty_sections(self, checked=False):
+        mw = self._mainwindow
+        if not mw:
+            return
+
+        if not self._fit_difficulty_sections:
+            if hasattr(mw, "_update_fit_difficulty_section_actions"):
+                mw._update_fit_difficulty_section_actions()
+            return
+
+        self._fit_difficulty_sections = self._normalize_fit_difficulty_sections(self._fit_difficulty_sections)
+        mw.chart.set_difficulty_segments(self._fit_difficulty_sections)
+        mw.chart.set_difficulty_edit_mode(True)
+
+    def export_fit_immersion(self, checked=False, threshold: float = 1.0):
+        if isinstance(checked, (int, float)) and not isinstance(checked, bool):
+            threshold = float(checked)
+        else:
+            threshold = float(threshold)
+
         mw = self._mainwindow
         if not mw:
             return
@@ -3727,6 +4022,13 @@ class GPXControlWidget(QWidget):
             QMessageBox.warning(self, "No GPX Time", "The GPX data has no valid start time.")
             return "<difficulty></difficulty>\n<speed></speed>"
 
+        if not self._fit_difficulty_sections:
+            self._fit_difficulty_sections = self._build_fit_immersion_difficulty_sections(gpx_data, threshold)
+            if self._fit_difficulty_sections and hasattr(mw, "chart"):
+                mw.chart.set_difficulty_segments(self._fit_difficulty_sections)
+            if hasattr(mw, "_update_fit_difficulty_section_actions"):
+                mw._update_fit_difficulty_section_actions()
+
         def format_time(seconds: float) -> str:
             total_seconds = int(seconds)
             minutes = total_seconds // 60
@@ -3735,17 +4037,22 @@ class GPXControlWidget(QWidget):
                 return "00:00"
             return f"{minutes}:{secs:02d}"
 
-        def calc_avg_slope(start_idx, end_idx):
-            segment = gpx_data[start_idx:end_idx+1]
-            total_dist = sum(p.get("delta_m", 0.0) for p in segment[1:])
-            elev_diff = segment[-1]["ele"] - segment[0]["ele"]
-            if total_dist > 0:
-                return (elev_diff / total_dist) * 100
-            else:
-                return 0.0
+        DIFFICULTY_MIN_CHANGE = max(float(threshold), 15.0)
+        DIFFICULTY_MIN_DURATION_S = 10.0
+        DIFFICULTY_SLOPE_SMOOTH_RADIUS = 5
+        DIFFICULTY_FLAT_SLOPE_THRESHOLD = 1.0
+        DIFFICULTY_TRANSIENT_DURATION_S = 3.0
 
         def convert_slope(slope):
-            return int(round(15 + (slope/15) * 85))
+            raw_value = 15 + (slope / 15) * 85
+            return int(round(raw_value))
+
+        def difficulty_class(slope):
+            if slope >= DIFFICULTY_FLAT_SLOPE_THRESHOLD:
+                return "up"
+            if slope <= -DIFFICULTY_FLAT_SLOPE_THRESHOLD:
+                return "down"
+            return "flat"
 
         def convert_speed(speed_kmh):
             return int(round(float(speed_kmh) / 2.0) * 2)
@@ -3849,42 +4156,191 @@ class GPXControlWidget(QWidget):
 
             return sections
 
-        difficulty_output = []
-        segment_start = 0
-        last_slope = calc_avg_slope(segment_start, segment_start+1)
-        last_value = convert_slope(last_slope)
-        difficulty_output.append(f"{format_time(0)}/{last_value}")
+        def difficulty_section_value(section):
+            weight_s = section.get("weight_s", section["end_s"] - section["start_s"])
+            if weight_s <= 0:
+                return int(section.get("value", convert_slope(0.0)))
+            raw_value = section["value_sum"] / weight_s
+            return int(round(raw_value))
 
-        i = segment_start + 2
-        while i < len(gpx_data):
-            best_index = None
-            best_delta = 0
-            current_slope = last_slope
-
-            for j in range(i, min(i + 60, len(gpx_data))):
-                avg_slope = calc_avg_slope(segment_start, j)
-                delta = convert_slope(avg_slope) - last_value
-
-                if abs(delta) >= threshold and abs(delta) > abs(best_delta):
-                    best_index = j
-                    best_delta = delta
-                    current_slope = avg_slope
-
-            if best_index is not None:
-                t = gpx_data[best_index]["time"]
-                rel_sec = (t - start_time).total_seconds()
-                new_val = convert_slope(current_slope)
-                difficulty_output.append(f"{format_time(rel_sec)}/{new_val}")
-                segment_start = best_index
-                last_slope = current_slope
-                last_value = new_val
-                i = best_index + 1
+        def merge_difficulty_sections(left, right):
+            weight_left = left.get("weight_s", left["end_s"] - left["start_s"])
+            weight_right = right.get("weight_s", right["end_s"] - right["start_s"])
+            if left.get("class") == right.get("class"):
+                merged_class = left.get("class")
+            elif weight_left >= weight_right:
+                merged_class = left.get("class", "flat")
             else:
-                i += 1
+                merged_class = right.get("class", "flat")
+            return {
+                "start_s": left["start_s"],
+                "end_s": right["end_s"],
+                "value_sum": left["value_sum"] + right["value_sum"],
+                "weight_s": weight_left + weight_right,
+                "class": merged_class,
+            }
 
-        t = gpx_data[-1]["time"]
-        rel_sec = (t - start_time).total_seconds()
-        difficulty_output.append(f"{format_time(rel_sec)}/{convert_slope(last_slope)}")
+        def merge_difficulty_sections_as(left, right, section_class):
+            merged = merge_difficulty_sections(left, right)
+            merged["class"] = section_class
+            return merged
+
+        def squash_equal_difficulty_sections(sections):
+            squashed = []
+            for section in sections:
+                if (
+                    squashed
+                    and squashed[-1].get("class") == section.get("class")
+                    and abs(difficulty_section_value(squashed[-1]) - difficulty_section_value(section)) < DIFFICULTY_MIN_CHANGE
+                ):
+                    squashed[-1] = merge_difficulty_sections_as(
+                        squashed[-1],
+                        section,
+                        section.get("class", "flat"),
+                    )
+                else:
+                    squashed.append(section)
+            return squashed
+
+        def merge_short_difficulty_sections(sections, max_duration_s=DIFFICULTY_MIN_DURATION_S):
+            sections = squash_equal_difficulty_sections(sections)
+
+            changed = True
+            while changed and len(sections) > 1:
+                changed = False
+                for idx, section in enumerate(sections):
+                    duration = section["end_s"] - section["start_s"]
+                    if duration > max_duration_s:
+                        continue
+
+                    section_class = section.get("class", "flat")
+                    merged = False
+
+                    if idx > 0 and sections[idx - 1].get("class") == section_class:
+                        sections[idx - 1:idx + 1] = [
+                            merge_difficulty_sections_as(sections[idx - 1], section, section_class)
+                        ]
+                        merged = True
+                    elif idx < len(sections) - 1 and sections[idx + 1].get("class") == section_class:
+                        sections[idx:idx + 2] = [
+                            merge_difficulty_sections_as(section, sections[idx + 1], section_class)
+                        ]
+                        merged = True
+                    elif (
+                        0 < idx < len(sections) - 1
+                        and sections[idx - 1].get("class") == sections[idx + 1].get("class")
+                    ):
+                        neighbor_class = sections[idx - 1].get("class", "flat")
+                        sections[idx - 1:idx + 2] = [
+                            merge_difficulty_sections_as(
+                                merge_difficulty_sections_as(sections[idx - 1], section, neighbor_class),
+                                sections[idx + 1],
+                                neighbor_class,
+                            )
+                        ]
+                        merged = True
+                    elif duration <= DIFFICULTY_TRANSIENT_DURATION_S and section_class == "flat" and idx > 0:
+                        # Absorb tiny neutral transition samples into the previous
+                        # section without moving the next real up/down boundary.
+                        prev_class = sections[idx - 1].get("class", "flat")
+                        sections[idx - 1:idx + 1] = [
+                            merge_difficulty_sections_as(sections[idx - 1], section, prev_class)
+                        ]
+                        merged = True
+
+                    if merged:
+                        sections = squash_equal_difficulty_sections(sections)
+                        changed = True
+                        break
+
+            return sections
+
+        difficulty_intervals = []
+
+        for idx in range(1, len(gpx_data)):
+            prev_time = gpx_data[idx - 1].get("time")
+            point_time = gpx_data[idx].get("time")
+            if not prev_time or not point_time:
+                continue
+
+            duration_s = (point_time - prev_time).total_seconds()
+            if duration_s <= 0:
+                continue
+
+            dist = float(gpx_data[idx].get("delta_m", 0.0))
+            if dist <= 0.5:
+                slope = 0.0
+            else:
+                prev_ele = float(gpx_data[idx - 1].get("ele", 0.0))
+                point_ele = float(gpx_data[idx].get("ele", 0.0))
+                slope = ((point_ele - prev_ele) / dist) * 100.0
+
+            section_start_s = (prev_time - start_time).total_seconds()
+            section_end_s = (point_time - start_time).total_seconds()
+            difficulty_intervals.append({
+                "start_s": section_start_s,
+                "end_s": section_end_s,
+                "slope": slope,
+                "weight_s": duration_s,
+            })
+
+        difficulty_sections = []
+        for pos, interval in enumerate(difficulty_intervals):
+            s = max(0, pos - DIFFICULTY_SLOPE_SMOOTH_RADIUS)
+            e = min(len(difficulty_intervals) - 1, pos + DIFFICULTY_SLOPE_SMOOTH_RADIUS)
+            smooth_slice = difficulty_intervals[s:e + 1]
+            smooth_weight = sum(item["weight_s"] for item in smooth_slice)
+            if smooth_weight <= 0:
+                smooth_slope = interval["slope"]
+            else:
+                smooth_slope = sum(item["slope"] * item["weight_s"] for item in smooth_slice) / smooth_weight
+
+            value = convert_slope(smooth_slope)
+            section_class = difficulty_class(smooth_slope)
+            section = {
+                "start_s": interval["start_s"],
+                "end_s": interval["end_s"],
+                "value_sum": value * interval["weight_s"],
+                "weight_s": interval["weight_s"],
+                "class": section_class,
+            }
+
+            if (
+                difficulty_sections
+                and difficulty_sections[-1].get("class") == section_class
+                and abs(value - difficulty_section_value(difficulty_sections[-1])) < DIFFICULTY_MIN_CHANGE
+            ):
+                difficulty_sections[-1] = merge_difficulty_sections_as(
+                    difficulty_sections[-1],
+                    section,
+                    section_class,
+                )
+            else:
+                difficulty_sections.append(section)
+
+        difficulty_sections = merge_short_difficulty_sections(difficulty_sections)
+
+        difficulty_output = []
+        for section in difficulty_sections:
+            difficulty_output.append(
+                f"{format_time(section['start_s'])}/{difficulty_section_value(section)}"
+            )
+
+        if not difficulty_output:
+            difficulty_output.append(f"{format_time(0)}/{convert_slope(0.0)}")
+            last_value = convert_slope(0.0)
+            last_written_s = 0.0
+        else:
+            last_value = difficulty_section_value(difficulty_sections[-1])
+            last_written_s = difficulty_sections[-1]["start_s"]
+
+        end_s = (gpx_data[-1]["time"] - start_time).total_seconds()
+        if last_written_s is None or int(end_s) != int(last_written_s):
+            difficulty_output.append(f"{format_time(end_s)}/{last_value}")
+
+        stored_difficulty_sections = getattr(self, "_fit_difficulty_sections", [])
+        if stored_difficulty_sections:
+            difficulty_output = self._difficulty_sections_to_output(stored_difficulty_sections, end_s)
 
         speed_sections = []
         for idx in range(1, len(gpx_data)):

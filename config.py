@@ -157,6 +157,16 @@ def is_edit_video_enabled() -> bool:
     val = s.value("video/editEnabled", False, type=bool)
     return val
 
+
+def is_fit_build_enabled() -> bool:
+    """
+    Enables Fit Immersion tools only for local/dev builds.
+    Default is False. Set FIT_BUILD=true/1/yes/on in .env or the process
+    environment to enable it.
+    """
+    val = os.environ.get("FIT_BUILD", "")
+    return str(val).strip().lower() in ("1", "true", "yes", "on")
+
     
 def check_app_version_and_reset_if_necessary():
     """

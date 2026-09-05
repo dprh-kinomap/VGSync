@@ -104,7 +104,7 @@ from managers.overlay_manager import OverlayManager
 # ggf. import_export_manager, safe_manager etc.
 from .dialogs import _IndexingDialog, _SafeExportDialog, DetachDialog
 from widgets.mini_chart_widget import MiniChartWidget
-from config import is_edit_video_enabled
+from config import is_edit_video_enabled, is_fit_build_enabled
 from core.gpx_parser import parse_gpx
 from core.gpx_parser import recalc_gpx_data, get_gpx_video_shift, set_gpx_video_shift
 from tools.merge_keyframes_incremental import merge_keyframes_incremental
@@ -128,7 +128,7 @@ from core.gopro_extractor import (
 
 
 
-FIT_BUILD = False  # Set to True if you want to enable Fit Immersion export functionality
+FIT_BUILD = is_fit_build_enabled()
 
 
 ### CLASS ####
@@ -1214,8 +1214,20 @@ class MainWindow(QMainWindow):
         shortcuts_menu.addAction(self.action_edit_elevations_chart)
         self.action_edit_elevations_chart.toggled.connect(self.chart.set_elevation_edit_mode)
         if FIT_BUILD:
-            export_fit = QAction("Export to Fit Immersion", self)
+            generate_fit_sections = QAction("Generate Difficulty Sections", self)
+            gpx_info_menu.addAction(generate_fit_sections)
+            generate_fit_sections.setStatusTip("Generate editable Fit Immersion difficulty sections from the GPX.")
+            generate_fit_sections.triggered.connect(self.gpx_control.generate_fit_immersion_difficulty_sections)
+
+            self.action_open_fit_sections = QAction("Open Difficulty Sections", self)
+            gpx_info_menu.addAction(self.action_open_fit_sections)
+            self.action_open_fit_sections.setStatusTip("Open saved/editable Fit Immersion difficulty sections on the chart.")
+            self.action_open_fit_sections.setEnabled(False)
+            self.action_open_fit_sections.triggered.connect(self.gpx_control.open_fit_immersion_difficulty_sections)
+
+            export_fit = QAction("Export Difficulty/Speed Sections", self)
             gpx_info_menu.addAction(export_fit)
+            export_fit.setStatusTip("Export cycling app difficulty and speed sections.")
             export_fit.triggered.connect(self.gpx_control.export_fit_immersion)
 
         
@@ -1269,6 +1281,8 @@ class MainWindow(QMainWindow):
         # Elevation edit on chart
         self.chart.elevationPointEdited.connect(self._on_chart_elevation_point_edited)
         self.chart.raiseTrackRequested.connect(self._on_raise_track_above_sea)
+        if FIT_BUILD:
+            self.chart.difficultySegmentsChanged.connect(self.gpx_control._on_chart_difficulty_segments_changed)
         
         # GpxControl -> GpxList
         self.gpx_widget.gpx_list.markBSet.connect(self._on_markB_in_list)
@@ -6097,6 +6111,9 @@ class MainWindow(QMainWindow):
             self._gpx_data.clear()
             self.gpx_widget.set_gpx_data([])
             self.chart.set_gpx_data([])
+            if FIT_BUILD and hasattr(self, "gpx_control"):
+                self.gpx_control.set_fit_difficulty_sections_from_project([])
+                self._update_fit_difficulty_section_actions()
             if getattr(self, "mini_chart_widget", None):
                 self.mini_chart_widget.set_gpx_data([])
 
@@ -6682,6 +6699,11 @@ class MainWindow(QMainWindow):
         if is_gpx_video_shift_set():
             project_data["gpx_video_shift"] = get_gpx_video_shift()
 
+        if FIT_BUILD and hasattr(self, "gpx_control"):
+            project_data["fit_difficulty_sections"] = (
+                self.gpx_control.get_fit_difficulty_sections_for_project()
+            )
+
         return project_data
 
     def _write_project_to_path(self, path: str, show_message: bool = False) -> bool:
@@ -6704,6 +6726,15 @@ class MainWindow(QMainWindow):
             else:
                 print(f"[WARN] Autosave failed for '{path}': {e}")
             return False
+
+    def _update_fit_difficulty_section_actions(self):
+        if not FIT_BUILD:
+            return
+        action = getattr(self, "action_open_fit_sections", None)
+        if action is None or not hasattr(self, "gpx_control"):
+            return
+        has_sections = bool(self.gpx_control.get_fit_difficulty_sections_for_project())
+        action.setEnabled(has_sections)
 
     def _on_autosave_timeout(self):
         """
@@ -6895,6 +6926,10 @@ class MainWindow(QMainWindow):
             for ovl in overlays:
                 self._overlay_manager.add_overlay(ovl)
 
+            if FIT_BUILD and hasattr(self, "gpx_control"):
+                fit_difficulty_sections = project_data.get("fit_difficulty_sections", [])
+                self.gpx_control.set_fit_difficulty_sections_from_project(fit_difficulty_sections)
+
             # 6. VideoEditor neu setzen
             self.video_editor.set_playlist(self.playlist)
             self.video_control.activate_controls(True)
@@ -6930,6 +6965,9 @@ class MainWindow(QMainWindow):
             # 7. GPX Widgets neu aufbauen
             self.gpx_widget.set_gpx_data(gpx_data)
             self.chart.set_gpx_data(gpx_data)
+            if FIT_BUILD and hasattr(self, "gpx_control") and self.gpx_control.get_fit_difficulty_sections_for_project():
+                self.chart.set_difficulty_segments(self.gpx_control.get_fit_difficulty_sections_for_project())
+                self.chart.set_difficulty_edit_mode(True)
             if self.mini_chart_widget:
                 self.mini_chart_widget.set_gpx_data(gpx_data)
 

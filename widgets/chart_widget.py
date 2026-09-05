@@ -18,7 +18,7 @@
 # along with VGSync. If not, see <https://www.gnu.org/licenses/>.
 #
 
-from PySide6.QtWidgets import QWidget
+from PySide6.QtWidgets import QWidget, QInputDialog, QMessageBox
 
 from PySide6.QtCore import Qt, QPoint, Signal, QPointF, QRect
 from datetime import timedelta
@@ -32,6 +32,7 @@ class ChartWidget(QWidget):
     markerClicked = Signal(int)
     raiseTrackRequested = Signal(float)
     elevationPointEdited = Signal(int, float)  # index, new_elevation
+    difficultySegmentsChanged = Signal(list)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -94,6 +95,15 @@ class ChartWidget(QWidget):
         self._ele_min_anchor_gap = 6
         self._ele_control_hit_x_radius = 18
         self._ele_control_hit_y_radius = 20
+
+        # Fit Immersion difficulty section edit mode
+        self._difficulty_segments = []
+        self._difficulty_edit_mode = False
+        self._dragging_difficulty_boundary_idx = None
+        self._difficulty_boundary_hit_radius = 8
+        self._difficulty_min_segment_s = 1.0
+        self._difficulty_value_rects = []
+        self._difficulty_delete_rects = []
         
     def _prevideo_cut_idx(self) -> int:
         """
@@ -180,8 +190,126 @@ class ChartWidget(QWidget):
         self._usl_idx_cursor = -1
         self._usl_badge_rect = None
         self._preferred_ele_control_indices = set()
+        self._difficulty_segments = []
+        self._difficulty_edit_mode = False
+        self._dragging_difficulty_boundary_idx = None
+        self._difficulty_value_rects = []
+        self._difficulty_delete_rects = []
         self._rebuild_elevation_control_indices()
         self.update()
+
+    def set_difficulty_segments(self, segments):
+        self._difficulty_segments = [dict(section) for section in (segments or [])]
+        for section in self._difficulty_segments:
+            self._sync_difficulty_section_weight(section)
+        self._dragging_difficulty_boundary_idx = None
+        self.update()
+
+    def difficulty_segments(self):
+        return [dict(section) for section in self._difficulty_segments]
+
+    def set_difficulty_edit_mode(self, enabled: bool):
+        self._difficulty_edit_mode = bool(enabled)
+        self._dragging_difficulty_boundary_idx = None
+        self.update()
+
+    def difficulty_edit_mode(self) -> bool:
+        return self._difficulty_edit_mode
+
+    def _sync_difficulty_section_weight(self, section):
+        duration = max(0.0, float(section.get("end_s", 0.0)) - float(section.get("start_s", 0.0)))
+        value = int(round(float(section.get("value", 15))))
+        section["value"] = value
+        section["weight_s"] = duration
+        section["value_sum"] = float(value) * duration
+
+    def _emit_difficulty_segments_changed(self):
+        for section in self._difficulty_segments:
+            self._sync_difficulty_section_weight(section)
+        self.difficultySegmentsChanged.emit(self.difficulty_segments())
+
+    def _edit_difficulty_segment_value(self, segment_idx: int) -> bool:
+        if not (0 <= segment_idx < len(self._difficulty_segments)):
+            return False
+        section = self._difficulty_segments[segment_idx]
+        old_value = int(round(float(section.get("value", 15))))
+        new_value, ok = QInputDialog.getInt(
+            self,
+            "Difficulty",
+            "Difficulty value:",
+            old_value,
+            -200,
+            300,
+            1,
+        )
+        if not ok:
+            return False
+        section["value"] = int(new_value)
+        self._sync_difficulty_section_weight(section)
+        self.update()
+        self._emit_difficulty_segments_changed()
+        return True
+
+    def _split_difficulty_segment(self, segment_idx: int, split_s: float) -> bool:
+        if not (0 <= segment_idx < len(self._difficulty_segments)):
+            return False
+        section = self._difficulty_segments[segment_idx]
+        start_s = float(section.get("start_s", 0.0))
+        end_s = float(section.get("end_s", start_s))
+        min_gap = self._difficulty_min_segment_s
+        if split_s <= start_s + min_gap or split_s >= end_s - min_gap:
+            return False
+
+        reply = QMessageBox.question(
+            self,
+            "Split Difficulty Section",
+            f"Split this section at {self._format_relative_seconds(split_s)}?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.Yes,
+        )
+        if reply != QMessageBox.Yes:
+            return False
+
+        left = dict(section)
+        right = dict(section)
+        left["end_s"] = split_s
+        right["start_s"] = split_s
+        self._sync_difficulty_section_weight(left)
+        self._sync_difficulty_section_weight(right)
+        self._difficulty_segments[segment_idx:segment_idx + 1] = [left, right]
+        self.update()
+        self._emit_difficulty_segments_changed()
+        return True
+
+    def _delete_difficulty_segment(self, segment_idx: int) -> bool:
+        if not (0 <= segment_idx < len(self._difficulty_segments)):
+            return False
+        if len(self._difficulty_segments) <= 1:
+            return False
+
+        removed = self._difficulty_segments.pop(segment_idx)
+        removed_start = float(removed.get("start_s", 0.0))
+        removed_end = float(removed.get("end_s", removed_start))
+
+        if segment_idx == 0:
+            self._difficulty_segments[0]["start_s"] = removed_start
+            self._sync_difficulty_section_weight(self._difficulty_segments[0])
+        elif segment_idx >= len(self._difficulty_segments):
+            self._difficulty_segments[-1]["end_s"] = removed_end
+            self._sync_difficulty_section_weight(self._difficulty_segments[-1])
+        else:
+            self._difficulty_segments[segment_idx - 1]["end_s"] = removed_end
+            self._sync_difficulty_section_weight(self._difficulty_segments[segment_idx - 1])
+
+        self.update()
+        self._emit_difficulty_segments_changed()
+        return True
+
+    def _format_relative_seconds(self, seconds: float) -> str:
+        total_seconds = int(round(max(0.0, float(seconds))))
+        minutes = total_seconds // 60
+        secs = total_seconds % 60
+        return f"{minutes}:{secs:02d}"
 
     def refresh_after_elevation_edit(self, preferred_idx: int | None = None):
         """Refresh draggable elevation controls without resetting zoom/scroll."""
@@ -190,6 +318,15 @@ class ChartWidget(QWidget):
             self._preferred_ele_control_indices.add(int(preferred_idx))
         self._rebuild_elevation_control_indices()
         self.update()
+
+    def add_elevation_anchor(self, index: int) -> bool:
+        """Add a persistent draggable elevation anchor at the given GPX index."""
+        if not (0 <= index < len(self._gpx_data)):
+            return False
+        self._preferred_ele_control_indices.add(int(index))
+        self._rebuild_elevation_control_indices()
+        self.update()
+        return True
 
     def _find_effective_drag_anchors(self, anchor_pos: int, dragged_idx: int):
         """Return previous/next anchors with enough spacing for a visible drag effect."""
@@ -468,7 +605,26 @@ class ChartWidget(QWidget):
             super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
-        if self._dragging_scroll:
+        if self._difficulty_edit_mode and self._dragging_difficulty_boundary_idx is not None:
+            boundary_idx = self._dragging_difficulty_boundary_idx
+            if 0 < boundary_idx < len(self._difficulty_segments):
+                new_s = self._relative_seconds_for_x(event.pos().x())
+                prev_section = self._difficulty_segments[boundary_idx - 1]
+                next_section = self._difficulty_segments[boundary_idx]
+                min_gap = self._difficulty_min_segment_s
+                lower = float(prev_section.get("start_s", 0.0)) + min_gap
+                upper = float(next_section.get("end_s", lower + min_gap)) - min_gap
+                if upper < lower:
+                    new_s = (lower + upper) / 2.0
+                else:
+                    new_s = max(lower, min(upper, new_s))
+                prev_section["end_s"] = new_s
+                next_section["start_s"] = new_s
+                self._sync_difficulty_section_weight(prev_section)
+                self._sync_difficulty_section_weight(next_section)
+                self.update()
+            event.accept()
+        elif self._dragging_scroll:
             delta_x = event.pos().x() - self._drag_start_x
             new_offset = self._offset_start - delta_x
             if new_offset < 0:
@@ -583,8 +739,37 @@ class ChartWidget(QWidget):
         else:
             event.ignore()
 
+    def mouseDoubleClickEvent(self, event):
+        if event.button() == Qt.LeftButton and self._difficulty_edit_mode and self._difficulty_segments:
+            for _segment_idx, rect in self._difficulty_value_rects + self._difficulty_delete_rects:
+                if rect.contains(event.pos()):
+                    event.accept()
+                    return
+            segment_idx = self._pick_difficulty_segment(event.pos().x())
+            if segment_idx is not None:
+                split_s = self._relative_seconds_for_x(event.pos().x())
+                self._split_difficulty_segment(segment_idx, split_s)
+                event.accept()
+                return
+        if event.button() == Qt.LeftButton and self._elevation_edit_mode:
+            count = len(self._gpx_data)
+            if count >= 2:
+                top_height = int(self._chart_height_top * self.height())
+                if event.pos().y() <= top_height:
+                    idx = self._index_for_x(event.pos().x())
+                    if self.add_elevation_anchor(idx):
+                        self._marker_index = idx
+                        self.markerClicked.emit(idx)
+                        event.accept()
+                        return
+        super().mouseDoubleClickEvent(event)
+
     def mouseReleaseEvent(self, event):
-        if event.button() == Qt.RightButton and self._dragging_scroll:
+        if event.button() == Qt.LeftButton and self._difficulty_edit_mode and self._dragging_difficulty_boundary_idx is not None:
+            self._dragging_difficulty_boundary_idx = None
+            self.difficultySegmentsChanged.emit(self.difficulty_segments())
+            event.accept()
+        elif event.button() == Qt.RightButton and self._dragging_scroll:
             self._dragging_scroll = False
             event.accept()
         elif event.button() == Qt.LeftButton and self._elevation_edit_mode and self._dragging_ele_idx is not None:
@@ -763,6 +948,85 @@ class ChartWidget(QWidget):
             x_ = x_for_index(i)
             path_ele.append((x_, y_for_ele(ele_vals[i])))
             path_spd.append((x_, y_for_speed(speed_vals[i])))
+
+        self._difficulty_value_rects = []
+        self._difficulty_delete_rects = []
+        if self._difficulty_segments:
+            def section_color(section):
+                terrain = section.get("class", "flat")
+                value = float(section.get("value", 15))
+                if terrain == "up" or value > 25:
+                    return QColor(255, 180, 40, 42)
+                if terrain == "down" or value < 5:
+                    return QColor(90, 170, 255, 42)
+                return QColor(170, 170, 170, 32)
+
+            painter.save()
+            try:
+                label_font = QFont(self.font().family(), max(7, int(h * 0.02)))
+                painter.setFont(label_font)
+                fm = painter.fontMetrics()
+                for segment_idx, section in enumerate(self._difficulty_segments):
+                    x0 = self._x_for_relative_seconds(section.get("start_s", 0.0))
+                    x1 = self._x_for_relative_seconds(section.get("end_s", 0.0))
+                    left = max(0.0, min(x0, x1))
+                    right = min(float(w), max(x0, x1))
+                    if right <= 0 or left >= w or right - left < 1:
+                        continue
+
+                    painter.setPen(Qt.NoPen)
+                    painter.setBrush(section_color(section))
+                    painter.drawRect(int(left), 0, int(max(1, right - left)), top_height)
+
+                    label = str(int(round(float(section.get("value", 15)))))
+                    label_w = fm.horizontalAdvance(label) + 12
+                    label_h = fm.height() + 6
+                    delete_w = label_h
+                    controls_w = label_w + delete_w + 4
+                    if right - left >= max(32, label_w):
+                        value_x = int(left + max(3.0, ((right - left) - controls_w) / 2.0))
+                        value_y = 24
+                        value_rect = QRect(value_x, value_y, int(label_w), int(label_h))
+                        self._difficulty_value_rects.append((segment_idx, value_rect))
+
+                        painter.setBrush(QColor(30, 30, 30, 165))
+                        painter.setPen(QPen(QColor(245, 245, 245, 190), 1))
+                        painter.drawRoundedRect(value_rect, 3, 3)
+                        painter.setPen(QColor(245, 245, 245, 230))
+                        painter.drawText(value_rect, Qt.AlignCenter, label)
+
+                        if right - left >= controls_w + 8 and len(self._difficulty_segments) > 1:
+                            delete_rect = QRect(value_rect.right() + 4, value_y, delete_w, label_h)
+                            self._difficulty_delete_rects.append((segment_idx, delete_rect))
+                            painter.setBrush(QColor(85, 28, 28, 185))
+                            painter.setPen(QPen(QColor(255, 150, 150, 210), 1))
+                            painter.drawRoundedRect(delete_rect, 3, 3)
+                            icon_pen = QPen(QColor(255, 220, 220, 235), 1)
+                            painter.setPen(icon_pen)
+                            icon_size = max(10, min(delete_rect.width(), delete_rect.height()) - 6)
+                            icon_left = delete_rect.center().x() - (icon_size // 2)
+                            icon_top = delete_rect.center().y() - (icon_size // 2)
+                            body_w = max(6, icon_size - 4)
+                            body_h = max(6, icon_size - 5)
+                            body_left = icon_left + (icon_size - body_w) // 2
+                            body_top = icon_top + 4
+                            lid_y = icon_top + 3
+                            painter.drawLine(body_left - 1, lid_y, body_left + body_w + 1, lid_y)
+                            painter.drawLine(body_left + 2, icon_top + 1, body_left + body_w - 2, icon_top + 1)
+                            painter.drawRect(body_left, body_top, body_w, body_h)
+                            painter.drawLine(body_left + 2, body_top + 2, body_left + body_w - 2, body_top + body_h - 2)
+                            painter.drawLine(body_left + body_w - 2, body_top + 2, body_left + 2, body_top + body_h - 2)
+
+                if self._difficulty_edit_mode:
+                    painter.setPen(QPen(QColor(255, 255, 255, 170), 2))
+                    painter.setBrush(QBrush(QColor(255, 255, 255, 120)))
+                    for section in self._difficulty_segments[1:]:
+                        xx = self._x_for_relative_seconds(section.get("start_s", 0.0))
+                        if -10 < xx < w + 10:
+                            painter.drawLine(QPointF(xx, 0), QPointF(xx, top_height))
+                            painter.drawEllipse(QPointF(xx, top_height - 10), 4, 4)
+            finally:
+                painter.restore()
     
         # ------------------------------------------------------
         # Linien zeichnen (Elevation = gelb, Speed = cyan)
@@ -1152,6 +1416,35 @@ class ChartWidget(QWidget):
                 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
+            if self._difficulty_edit_mode and self._difficulty_segments:
+                for segment_idx, rect in self._difficulty_delete_rects:
+                    if rect.contains(event.pos()):
+                        self._delete_difficulty_segment(segment_idx)
+                        event.accept()
+                        return
+
+                for segment_idx, rect in self._difficulty_value_rects:
+                    if rect.contains(event.pos()):
+                        self._edit_difficulty_segment_value(segment_idx)
+                        event.accept()
+                        return
+
+                boundary_idx = self._pick_difficulty_boundary(event.pos().x())
+                if boundary_idx is not None:
+                    self._dragging_difficulty_boundary_idx = boundary_idx
+                    event.accept()
+                    return
+
+                segment_idx = self._pick_difficulty_segment(event.pos().x())
+                if segment_idx is not None:
+                    section = self._difficulty_segments[segment_idx]
+                    idx = self._index_for_x(event.pos().x())
+                    self._marker_index = idx
+                    self.update()
+                    self.markerClicked.emit(idx)
+                    event.accept()
+                    return
+
             # 1) Klick auf den USL-Badge => Dialog
             if self._usl_badge_rect and self._usl_badge_rect.contains(event.pos()):
                 usl = self._effective_usl_indices()
@@ -1285,6 +1578,55 @@ class ChartWidget(QWidget):
         ratio = max(0, min(ratio, 1))
         idx_ = int(round(ratio * (count - 1)))
         return max(0, min(idx_, count - 1))
+
+    def _track_duration_s(self) -> float:
+        if len(self._gpx_data) < 2:
+            return 0.0
+        t0 = self._gpx_data[0].get("time")
+        t1 = self._gpx_data[-1].get("time")
+        if t0 and t1:
+            duration = (t1 - t0).total_seconds()
+            return max(0.0, float(duration))
+        return float(max(0, len(self._gpx_data) - 1))
+
+    def _x_for_relative_seconds(self, seconds: float) -> float:
+        duration = self._track_duration_s()
+        if duration <= 0.0:
+            return 0.0
+        chart_width = self.width() * self._zoom_factor
+        ratio = max(0.0, min(float(seconds) / duration, 1.0))
+        return ratio * chart_width - self._horizontal_offset
+
+    def _relative_seconds_for_x(self, x_screen: float) -> float:
+        duration = self._track_duration_s()
+        if duration <= 0.0:
+            return 0.0
+        chart_width = self.width() * self._zoom_factor
+        if chart_width <= 0.0:
+            return 0.0
+        abs_x = float(x_screen) + self._horizontal_offset
+        ratio = max(0.0, min(abs_x / chart_width, 1.0))
+        return ratio * duration
+
+    def _pick_difficulty_boundary(self, x_screen: float):
+        if not (self._difficulty_edit_mode and self._difficulty_segments):
+            return None
+        for idx in range(1, len(self._difficulty_segments)):
+            boundary_x = self._x_for_relative_seconds(self._difficulty_segments[idx]["start_s"])
+            if abs(boundary_x - x_screen) <= self._difficulty_boundary_hit_radius:
+                return idx
+        return None
+
+    def _pick_difficulty_segment(self, x_screen: float):
+        if not (self._difficulty_edit_mode and self._difficulty_segments):
+            return None
+        seconds = self._relative_seconds_for_x(x_screen)
+        for idx, section in enumerate(self._difficulty_segments):
+            if section["start_s"] <= seconds < section["end_s"]:
+                return idx
+        if self._difficulty_segments and seconds >= self._difficulty_segments[-1]["end_s"]:
+            return len(self._difficulty_segments) - 1
+        return None
         
     def set_sync_range(self, idx_start: int, idx_end: int):
         if idx_start is None or idx_end is None:
