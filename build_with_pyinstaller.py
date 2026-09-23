@@ -38,6 +38,11 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 LOCAL_FFMPEG = os.path.join(BASE_DIR, "ffmpeg")  # z.B. hier liegt dein ffmpeg/
 LOCAL_MPV    = os.path.join(BASE_DIR, "mpv")     # z.B. hier liegt dein mpv/
 
+BUNDLED_GUIDANCE_FILES = {
+    "vgsync_ffmpeg.txt",
+    "vgsync_mpv.txt",
+}
+
 def write_sha256(path: str) -> str:
     """
     Erzeugt neben <path> eine Datei <path>.sha256 mit Inhalt:
@@ -113,7 +118,7 @@ def run_cmd(cmd_list):
     print("[RUN]", " ".join(cmd_list))
     subprocess.check_call(cmd_list)
 
-def copy_tree_all(src_dir, dst_dir):
+def copy_tree_all(src_dir, dst_dir, excluded_filenames=None):
     """
     Kopiert alle Dateien/Ordner rekursiv von src_dir nach dst_dir.
     Existiert src_dir nicht, wird eine Warnung ausgegeben.
@@ -127,10 +132,39 @@ def copy_tree_all(src_dir, dst_dir):
         tgt_sub = os.path.join(dst_dir, rel)
         os.makedirs(tgt_sub, exist_ok=True)
         for f in files:
+            if excluded_filenames and f.casefold() in excluded_filenames:
+                print("[SKIP]", os.path.join(root, f))
+                continue
             sfile = os.path.join(root, f)
             dfile = os.path.join(tgt_sub, f)
             print("[COPY]", sfile, "->", dfile)
             shutil.copy2(sfile, dfile)
+
+
+def write_bundled_guidance(internal_dir):
+    """Write VGSync-owned guidance beside the bundled third-party binaries."""
+    guidance = {
+        "ffmpeg": (
+            "VGSync ffmpeg bundle\n"
+            "====================\n\n"
+            "This directory contains the ffmpeg files selected for the VGSync release.\n"
+            "ffmpeg is third-party software; consult its accompanying license and source\n"
+            "information from the distributor of the binary package.\n"
+        ),
+        "mpv": (
+            "VGSync mpv bundle\n"
+            "=================\n\n"
+            "This directory contains the mpv files selected for the VGSync release.\n"
+            "mpv is third-party software; consult its accompanying license and source\n"
+            "information from the distributor of the binary package.\n"
+        ),
+    }
+    for bundle_name, contents in guidance.items():
+        bundle_dir = os.path.join(internal_dir, bundle_name)
+        os.makedirs(bundle_dir, exist_ok=True)
+        guidance_path = os.path.join(bundle_dir, f"VGSync_{bundle_name}.txt")
+        with open(guidance_path, "w", encoding="utf-8", newline="\n") as guidance_file:
+            guidance_file.write(contents)
             
             
 def copy_only_pdfs(src_dir, dst_dir):
@@ -228,9 +262,18 @@ def build_windows(build_setup: bool = False, onefile: bool = False, bundle_env: 
     internal_dir = os.path.join(target_dir, "_internal")
     os.makedirs(internal_dir, exist_ok=True)
     print("[INFO] Kopiere ffmpeg →", os.path.join(internal_dir, "ffmpeg"))
-    copy_tree_all(LOCAL_FFMPEG, os.path.join(internal_dir, "ffmpeg"))
+    copy_tree_all(
+        LOCAL_FFMPEG,
+        os.path.join(internal_dir, "ffmpeg"),
+        BUNDLED_GUIDANCE_FILES,
+    )
     print("[INFO] Kopiere mpv    →", os.path.join(internal_dir, "mpv"))
-    copy_tree_all(LOCAL_MPV, os.path.join(internal_dir, "mpv"))
+    copy_tree_all(
+        LOCAL_MPV,
+        os.path.join(internal_dir, "mpv"),
+        BUNDLED_GUIDANCE_FILES,
+    )
+    write_bundled_guidance(internal_dir)
 
     # Taskbar-Icon zusätzlich in _internal/icon
     if os.path.isfile(icon_file):

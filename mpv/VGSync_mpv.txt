@@ -1,0 +1,6 @@
+VGSync mpv bundle
+=================
+
+Place the mpv files selected for the VGSync release in this directory.
+mpv is third-party software; consult its accompanying license and source
+information from the distributor of the binary package.

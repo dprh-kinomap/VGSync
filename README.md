@@ -100,10 +100,10 @@ Install External Binaries (Windows)
 
 Download the following ZIP files from the latest VGSync Release:
 
-- ffmpeg.zip → extract into "ffmpeg/" folder
-- mpv.zip → extract into "mpv/" folder
+- ffmpeg.zip → extract the binary files into the "ffmpeg/" folder
+- mpv.zip → extract the binary files into the "mpv/" folder
 
-The "ffmpeg/" and "mpv/" folders include guidance files ("VGSync_ffmpeg.txt" and "VGSync_mpv.txt") describing the expected contents.
+The Windows build creates its own "VGSync_ffmpeg.txt" and "VGSync_mpv.txt" guidance files next to the bundled binaries. Third-party license, attribution, and source-code notice files supplied with the ffmpeg and mpv binaries are preserved.
 
 -------------------------------------------------------------------------------
 

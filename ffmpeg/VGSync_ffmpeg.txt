@@ -1,0 +1,6 @@
+VGSync ffmpeg bundle
+====================
+
+Place the ffmpeg files selected for the VGSync release in this directory.
+ffmpeg is third-party software; consult its accompanying license and source
+information from the distributor of the binary package.
