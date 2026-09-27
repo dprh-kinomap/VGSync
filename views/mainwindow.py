@@ -3690,15 +3690,24 @@ class MainWindow(QMainWindow):
         where each point has properties.index = i.
         """
         features = []
-        positive_time = data[0].get("time") or 0.0
-        if get_gpx_video_shift() < 0: #extra points at begin
-            positive_time = positive_time + timedelta(seconds = abs(get_gpx_video_shift()))
+        first_time = data[0].get("time")
+        positive_time = None
+        if isinstance(first_time, datetime) and get_gpx_video_shift() < 0:
+            positive_time = first_time + timedelta(seconds=abs(get_gpx_video_shift()))
+
+        def is_visible_point(pt):
+            point_time = pt.get("time")
+            return (
+                positive_time is None
+                or not isinstance(point_time, datetime)
+                or point_time >= positive_time
+            )
 
         # Linestring-Koords
         coords_line = []
         outside_line = []
         for i, pt in enumerate(data):
-            if pt.get("time") or 0.0 >= positive_time:
+            if is_visible_point(pt):
                 coords_line.append([pt["lon"], pt["lat"]])
             else:
                 outside_line.append([pt["lon"], pt["lat"]])
@@ -3735,7 +3744,7 @@ class MainWindow(QMainWindow):
                 },
                 "properties": {
                     "index": i,
-                    "color": "#000000" if (pt.get("time") or 0.0) >= positive_time else "grey", 
+                    "color": "#000000" if is_visible_point(pt) else "grey",
                 }
             }
             features.append(point_feat)
