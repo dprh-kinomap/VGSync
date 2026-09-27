@@ -4426,6 +4426,20 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Load GPX", "File is empty or invalid.")
             self.map_widget.view.page().runJavaScript("hideLoading();")
             return
+
+        if mode == "append":
+            append_times = [pt.get("time") for pt in new_data]
+            existing_end_time = self._gpx_data[-1].get("time") if self._gpx_data else None
+            if not all(isinstance(point_time, datetime) for point_time in append_times) or (
+                self._gpx_data and not isinstance(existing_end_time, datetime)
+            ):
+                QMessageBox.warning(
+                    self,
+                    "Load GPX",
+                    "GPX files can only be appended when every track point has a valid timestamp."
+                )
+                self.map_widget.view.page().runJavaScript("hideLoading();")
+                return
     
         if mode == "new":
             # --- NEU: Immer Slot 1 füllen ---

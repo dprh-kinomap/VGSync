@@ -1190,8 +1190,10 @@ class ChartWidget(QWidget):
         #painter.setPen(QPen(QColor(255, 255, 255), 4))# Weiß
         
         for i in range(1, count):
-            # Zeitdifferenz zwischen Punkt i-1 und i:
-            dt = (self._gpx_data[i]["time"] - self._gpx_data[i-1]["time"]).total_seconds() if self._gpx_data[i]["time"] else 0
+            # Time-less GPX points cannot define a stop interval.
+            current_time = self._gpx_data[i].get("time")
+            previous_time = self._gpx_data[i - 1].get("time")
+            dt = (current_time - previous_time).total_seconds() if current_time and previous_time else 0
             if dt > self._stop_threshold:
                 # x_-Koordinate des Punktes i (bereits in path_spd gespeichert)
                 x_ = path_spd[i][0]
@@ -1260,7 +1262,8 @@ class ChartWidget(QWidget):
         painter.drawText(6, y0_spd - 2, "0 km/h")
         
         # --- X-Axis Time Labels ---
-        if self._gpx_data and self._gpx_data[0].get("time"):
+        timed_points = [pt.get("time") for pt in self._gpx_data if pt.get("time")]
+        if timed_points:
             try:
                 time_label_font = QFont(self.font().family(), max(7, int(h * 0.02)))
                 painter.setFont(time_label_font)
@@ -1270,9 +1273,12 @@ class ChartWidget(QWidget):
             painter.setPen(QColor(150, 150, 150))
             
             # Calculate time span
-            start_time = self._gpx_data[0]["time"]
-            end_time = self._gpx_data[-1]["time"]
+            start_time = timed_points[0]
+            end_time = timed_points[-1]
             total_secs = (end_time - start_time).total_seconds()
+
+            if total_secs < 0:
+                return
             
             # Determine a good interval for time labels (every 60s, 300s, 600s, 1800s, etc.)
             if total_secs <= 300:
