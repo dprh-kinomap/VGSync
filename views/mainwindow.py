@@ -1132,7 +1132,8 @@ class MainWindow(QMainWindow):
         self._street_view_bridge.mapCoordinateClickedSignal.connect(self._on_street_view_coordinate_changed)
         self._street_view_bridge.newPointInsertedSignal.connect(self.on_new_gpx_point_inserted)
         self.street_view_layout.addWidget(self.street_view_view)
-        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        # Web assets are shipped next to the executable, not beside frozen modules.
+        base_dir = os.path.dirname(os.path.abspath(sys.argv[0]))
         street_html_path = os.path.join(base_dir, "map_page.html")
         self.street_view_view.load(QUrl.fromLocalFile(street_html_path))
         self.street_view_view.loadFinished.connect(self._on_street_view_page_loaded)
