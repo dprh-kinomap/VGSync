@@ -600,16 +600,14 @@ class GPXListWidget(QWidget):
  
     def delete_selected_range(self, shift: bool = True):
         """
-        Löscht [markB..markE], 
-        setzt Zeitlücke = 1s,
-        ruft recalc_gpx_data,
-        und updatet Table => set_gpx_data.
-        Danach entfernen wir die betroffenen Punkte auch aus der Karte,
-        indem wir 'remove_point_on_map(stable_id)' aufrufen (NEU).
+        Delete [markB..markE], set the time gap to one second,
+        recalculate the GPX metrics, and rebuild the table with set_gpx_data.
+        Then remove the affected points from the map with
+        remove_point_on_map(stable_id).
         """
         b, e = self.get_active_range()
         if b is None:
-            print("[DEBUG] Nichts markiert, Abbruch.")
+            print("[DEBUG] Nothing selected; cancelling deletion.")
             return
     
         if e is None:
@@ -617,9 +615,9 @@ class GPXListWidget(QWidget):
         if b > e:
             b, e = e, b
     
-        # Grenzen checken
+        # Validate bounds.
         if b < 0 or b >= len(self._gpx_data):
-            print("[DEBUG] B ausserhalb => Abbruch.")
+            print("[DEBUG] Mark B is out of bounds; cancelling deletion.")
             return
         if e < 0:
             e = 0
@@ -628,53 +626,61 @@ class GPXListWidget(QWidget):
     
         print(f"[DEBUG] DELETE => b={b}, e={e}")
         
-        # 1) Undo-Snapshot
+        # 1) Save an undo snapshot.
         import copy
         old_data = copy.deepcopy(self._gpx_data)
         self._history_stack.append(old_data)
     
-        # (NEU) 1b) Wir merken uns die stable_ids der zu löschenden Punkte:
+        # 1b) Remember stable IDs for the points being deleted.
         to_remove_ids = []
         for i in range(b, e+1):
             if "stable_id" in self._gpx_data[i]:
                 to_remove_ids.append(self._gpx_data[i]["stable_id"])
     
-        if(not shift and b==0 and e < len(self._gpx_data)): #if delete first point -> gpx-video shift to update
-            delta = (self._gpx_data[e+1].get("time") - self._gpx_data[0].get("time")).total_seconds()
-            set_gpx_video_shift(get_gpx_video_shift() + delta)
+        if not shift and b == 0 and e + 1 < len(self._gpx_data):
+            first_time = self._gpx_data[0].get("time")
+            next_time = self._gpx_data[e + 1].get("time")
+            if isinstance(first_time, datetime) and isinstance(next_time, datetime):
+                delta = (next_time - first_time).total_seconds()
+                set_gpx_video_shift(get_gpx_video_shift() + delta)
+            else:
+                print("[DEBUG] GPX timestamps missing; skipping video-shift adjustment.")
             
-        # 2) Entfernen
+        # 2) Remove the points.
         del self._gpx_data[b:e+1]
     
-        # 3) Zeitlücke = 1 Sek
+        # 3) Leave a one-second time gap.
         if shift and b > 0 and b < len(self._gpx_data):
             time_before = self._gpx_data[b-1]["time"]
             time_after  = self._gpx_data[b]["time"]
-            old_gap = (time_after - time_before).total_seconds()
-            shift = old_gap - 1.0
-            if shift > 0:
-                from datetime import timedelta
-                for i in range(b, len(self._gpx_data)):
-                    self._gpx_data[i]["time"] = self._gpx_data[i]["time"] - timedelta(seconds=shift)
-            print(f"[DEBUG] SHIFT={shift:.3f}s, old_gap={old_gap:.3f}s")
+            if isinstance(time_before, datetime) and isinstance(time_after, datetime):
+                shift = (time_after - time_before).total_seconds() - 1.0
+                if shift > 0:
+                    for i in range(b, len(self._gpx_data)):
+                        point_time = self._gpx_data[i].get("time")
+                        if isinstance(point_time, datetime):
+                            self._gpx_data[i]["time"] = point_time - timedelta(seconds=shift)
+                print(f"[DEBUG] SHIFT={shift:.3f}s, old_gap={shift + 1.0:.3f}s")
+            else:
+                print("[DEBUG] GPX timestamps missing; skipping time-gap adjustment.")
 
-        # 4) Neu berechnen
+        # 4) Recalculate metrics.
         from core.gpx_parser import recalc_gpx_data
         recalc_gpx_data(self._gpx_data) 
     
-        # 5) Tabelle updaten
+        # 5) Refresh the table.
         self.set_gpx_data(self._gpx_data)
     
-        # 6) Markierung entfernen
+        # 6) Clear the selection.
         self.clear_marked_range()
-        print("[DEBUG] delete_selected_range => fertig.")
+        print("[DEBUG] delete_selected_range completed.")
     
-        # (NEU) 7) Map partial update => remove
-        mw = self._get_mainwindow()  # (NEU) => MainWindow holen
+        # 7) Update the map by removing the affected points.
+        mw = self._get_mainwindow()
         if mw is not None:
             for sid in to_remove_ids:
                 if sid:
-                    mw.remove_point_on_map(sid)  # ruft JS 'removePoint' auf
+                    mw.remove_point_on_map(sid)  # Calls JavaScript removePoint().
     
         
    
@@ -1006,4 +1012,3 @@ class GPXListWidget(QWidget):
         super().resizeEvent(e)
         if hasattr(self, "_dnd_overlay") and self._dnd_overlay:
             self._dnd_overlay.setGeometry(self.rect())
-    

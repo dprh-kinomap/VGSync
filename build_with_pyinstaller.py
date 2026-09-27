@@ -185,7 +185,7 @@ def copy_only_pdfs(src_dir, dst_dir):
                 print("[COPY PDF]", sfile, "->", dfile)
                 shutil.copy2(sfile, dfile)            
 
-def build_windows(build_setup: bool = False, onefile: bool = False, bundle_env: bool = False, pyinstaller_key: str = ""):
+def build_windows(build_setup: bool = False, onefile: bool = False, bundle_env: bool = True, pyinstaller_key: str = ""):
     license_path = ensure_license_txt()
     app_version = load_app_version()
     print(f"[INFO] APP_VERSION: {app_version}")
@@ -442,7 +442,10 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument("--build-installer", action="store_true", help="Build Windows installer via Inno Setup")
     p.add_argument("--onefile", action="store_true", help="Build a single-file PyInstaller executable")
-    p.add_argument("--bundle-env", action="store_true", help="Include .env inside the PyInstaller bundle")
+    env_group = p.add_mutually_exclusive_group()
+    env_group.add_argument("--bundle-env", dest="bundle_env", action="store_true", help="Include .env inside the PyInstaller bundle (default)")
+    env_group.add_argument("--no-bundle-env", dest="bundle_env", action="store_false", help="Do not include .env inside the PyInstaller bundle")
+    p.set_defaults(bundle_env=True)
     p.add_argument("--pyinstaller-key", default="", help="Optional PyInstaller key to encrypt bytecode")
     args = p.parse_args()
     if platform.system() != "Windows":

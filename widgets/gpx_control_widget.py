@@ -1154,16 +1154,16 @@ class GPXControlWidget(QWidget):
     def _process_delete_points(self, shift_next: bool = True):
         """
         Delete-/Remove-Button:
-          - Standard: leitet an gpx_list.delete_selected_range(shift_next) weiter
-          - Sonderfall (Head-Cut): Remove („-“) + Range beginnt bei Index 0
-            => Δt inkl. +1 Schrittweite bestimmen
-            => löschen
-            => Δt ab Index 1 addieren
-            => Zeiten auf 0.000 normalisieren
-            => GPX–Video-Shift um Δt reduzieren (damit Liste bei 0.000 startet)
-            => Recalc + UI-Refresh
+          - Standard: delegates to gpx_list.delete_selected_range(shift_next)
+          - Special case (head cut): Remove ("-") + range starts at index 0
+            => calculate delta including one additional time step
+            => delete the range
+            => add the delta from index 1 onward
+            => normalize timestamps to 0.000
+            => reduce the GPX-video shift by the delta so the list starts at 0.000
+            => recalculate metrics and refresh the UI
         """
-        # Lokale Imports, damit datetime/timedelta sicher definiert sind
+        # Keep datetime and timedelta local to this workflow.
         from datetime import datetime, timedelta
 
         mw = self._mainwindow
@@ -1176,7 +1176,7 @@ class GPXControlWidget(QWidget):
             )
             return
 
-        # --- Graubereich-Check wie gehabt ---
+        # --- Check whether the selected range touches the pre-video section ---
         try:
             cur_shift = get_gpx_video_shift()
         except Exception:
@@ -1192,14 +1192,20 @@ class GPXControlWidget(QWidget):
             if data and b is not None and e is not None:
                 if b > e:
                     b, e = e, b
-                positive_time = data[0]["time"] + timedelta(seconds=abs(cur_shift))
-                hit_grey = data[b]["time"] < positive_time
+                if 0 <= b < len(data):
+                    first_time = data[0].get("time")
+                    marker_time = data[b].get("time")
+                    if isinstance(first_time, datetime) and isinstance(marker_time, datetime):
+                        positive_time = first_time + timedelta(seconds=abs(cur_shift))
+                        hit_grey = marker_time < positive_time
+                    else:
+                        print("[DEBUG] GPX timestamps missing; skipping pre-video range check.")
 
         # --- Undo + Busy ---
         mw.register_gpx_undo_snapshot()
         mw.map_widget.view.page().runJavaScript("showLoading('Deleting GPX-Range...');")
 
-        # --- Head-Cut erkennen (nur für Remove / shift_next == False) ---
+        # --- Detect a head cut (Remove only / shift_next == False) ---
         headcut = False
         head_cut_diff_s = 0.0
         b_idx = mw.gpx_widget.gpx_list._markB_idx
@@ -1211,40 +1217,41 @@ class GPXControlWidget(QWidget):
             if b == 0 and 0 <= e < len(gpx_data):
                 t0 = gpx_data[0]["time"]
                 tE = gpx_data[e]["time"]
-                # Schrittweite ermessen (typisch 1 s), robust:
-                if e + 1 < len(gpx_data):
-                    step_s = (gpx_data[e + 1]["time"] - gpx_data[e]["time"]).total_seconds()
-                elif len(gpx_data) >= 2:
-                    step_s = (gpx_data[1]["time"] - gpx_data[0]["time"]).total_seconds()
+                if isinstance(t0, datetime) and isinstance(tE, datetime):
+                    if e + 1 < len(gpx_data) and isinstance(gpx_data[e + 1].get("time"), datetime):
+                        step_s = (gpx_data[e + 1]["time"] - tE).total_seconds()
+                    elif len(gpx_data) >= 2 and isinstance(gpx_data[1].get("time"), datetime):
+                        step_s = (gpx_data[1]["time"] - t0).total_seconds()
+                    else:
+                        step_s = 0.0
+                    head_cut_diff_s = (tE - t0).total_seconds() + step_s
+                    headcut = head_cut_diff_s > 0.0
                 else:
-                    step_s = 0.0
-                # Inklusive Range => + step_s
-                head_cut_diff_s = (tE - t0).total_seconds() + step_s
-                headcut = head_cut_diff_s > 0.0
-                # print(f"[DEBUG] HeadCut candidate: Δt={head_cut_diff_s:.3f}s  (b=0..e={e})")
+                    print("[DEBUG] GPX timestamps missing; deleting head range without time adjustment.")
+                # print(f"[DEBUG] Head-cut candidate: delta={head_cut_diff_s:.3f}s  (b=0..e={e})")
 
-        # --- Bereich löschen ---
+        # --- Delete the selected range ---
         mw.gpx_widget.gpx_list.delete_selected_range(shift_next)
 
-        # --- Nachbearbeitung NUR für Head-Cut (Remove ab Index 0) ---
+        # --- Post-process a head cut only (Remove from index 0) ---
         if headcut and shift_next:
             data_after = mw.gpx_widget.gpx_list._gpx_data
             if data_after and len(data_after) >= 2:
-                # 1) Δt ab Index 1 addieren (Index 1..N-1)
+                # 1) Add the delta from index 1 onward (indices 1..N-1).
                 dt_add = timedelta(seconds=head_cut_diff_s)
                 for i in range(1, len(data_after)):
                     ti = data_after[i].get("time")
                     if ti is not None:
                         data_after[i]["time"] = ti + dt_add
 
-                # 2) Zeiten auf 0.000 normalisieren (erster verbleibender Punkt als Basis)
+                # 2) Normalize timestamps to 0.000 using the first remaining point.
                 base_dt = data_after[0]["time"]
                 epoch0 = datetime(1970, 1, 1)
                 for pt in data_after:
                     rel_s = (pt["time"] - base_dt).total_seconds()
                     pt["time"] = epoch0 + timedelta(seconds=rel_s)
 
-                # 3) GPX–Video-Shift anpassen: alterShift - Δt (min. 0)
+                # 3) Adjust GPX-video shift: old shift - delta (minimum 0).
                 try:
                     old_shift = get_gpx_video_shift() or 0.0
                 except Exception:
@@ -1259,7 +1266,7 @@ class GPXControlWidget(QWidget):
                 except Exception as e:
                     print(f"[DEBUG] set_gpx_video_shift failed: {e}")
 
-                # 4) Recalc + UI Refresh
+                # 4) Recalculate metrics and refresh the UI.
                 try:
                     from core.gpx_parser import recalc_gpx_data
                     recalc_gpx_data(data_after)
@@ -1276,10 +1283,10 @@ class GPXControlWidget(QWidget):
                 mw.map_widget.loadRoute(mw._build_route_geojson_from_gpx(data_after), do_fit=False)
 
                 mw.map_widget.view.page().runJavaScript("hideLoading();")
-                # Headcut-Fall ist vollständig behandelt → früh raus
+                # The head-cut workflow is complete.
                 return
 
-        # --- Standard-Updates (alle anderen Fälle unverändert) ---
+        # --- Standard updates for all other cases ---
         mw._update_gpx_overview()
         mw._gpx_data = mw.gpx_widget.gpx_list._gpx_data
         route_geojson = mw._build_route_geojson_from_gpx(mw._gpx_data)
