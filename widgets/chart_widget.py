@@ -1595,24 +1595,73 @@ class ChartWidget(QWidget):
             return max(0.0, float(duration))
         return float(max(0, len(self._gpx_data) - 1))
 
-    def _x_for_relative_seconds(self, seconds: float) -> float:
+    def _index_for_relative_seconds(self, seconds: float) -> float:
+        """Map elapsed track time to the chart's sample-index x-axis."""
+        count = len(self._gpx_data)
+        if count < 2:
+            return 0.0
+
         duration = self._track_duration_s()
         if duration <= 0.0:
             return 0.0
+        target = max(0.0, min(float(seconds), duration))
+        start_time = self._gpx_data[0].get("time")
+        if start_time is None:
+            return target / duration * (count - 1)
+
+        low, high = 0, count - 1
+        while low <= high:
+            middle = (low + high) // 2
+            point_time = self._gpx_data[middle].get("time")
+            if point_time is None:
+                return target / duration * (count - 1)
+            point_seconds = (point_time - start_time).total_seconds()
+            if point_seconds < target:
+                low = middle + 1
+            else:
+                high = middle - 1
+
+        right = max(1, min(low, count - 1))
+        left = right - 1
+        left_time = self._gpx_data[left].get("time")
+        right_time = self._gpx_data[right].get("time")
+        if left_time is None or right_time is None:
+            return target / duration * (count - 1)
+
+        left_seconds = (left_time - start_time).total_seconds()
+        span = (right_time - left_time).total_seconds()
+        if span <= 0.0:
+            return float(right)
+        return left + max(0.0, min((target - left_seconds) / span, 1.0))
+
+    def _x_for_relative_seconds(self, seconds: float) -> float:
+        count = len(self._gpx_data)
+        if count < 2:
+            return 0.0
         chart_width = self.width() * self._zoom_factor
-        ratio = max(0.0, min(float(seconds) / duration, 1.0))
-        return ratio * chart_width - self._horizontal_offset
+        index = self._index_for_relative_seconds(seconds)
+        return index / (count - 1) * chart_width - self._horizontal_offset
 
     def _relative_seconds_for_x(self, x_screen: float) -> float:
-        duration = self._track_duration_s()
-        if duration <= 0.0:
+        count = len(self._gpx_data)
+        if count < 2:
             return 0.0
         chart_width = self.width() * self._zoom_factor
         if chart_width <= 0.0:
             return 0.0
         abs_x = float(x_screen) + self._horizontal_offset
-        ratio = max(0.0, min(abs_x / chart_width, 1.0))
-        return ratio * duration
+        index = max(0.0, min(abs_x / chart_width, 1.0)) * (count - 1)
+        left = int(index)
+        right = min(left + 1, count - 1)
+        fraction = index - left
+        start_time = self._gpx_data[0].get("time")
+        left_time = self._gpx_data[left].get("time")
+        right_time = self._gpx_data[right].get("time")
+        if start_time is None or left_time is None or right_time is None:
+            return index / (count - 1) * self._track_duration_s()
+        left_seconds = (left_time - start_time).total_seconds()
+        right_seconds = (right_time - start_time).total_seconds()
+        return left_seconds + fraction * (right_seconds - left_seconds)
 
     def _pick_difficulty_boundary(self, x_screen: float):
         if not (self._difficulty_edit_mode and self._difficulty_segments):
